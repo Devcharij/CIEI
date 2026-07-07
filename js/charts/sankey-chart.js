@@ -1,8 +1,7 @@
 /**
  * sankey-chart.js
  * Official Google Charts Sankey Diagram implementation with Interactive Pan/Zoom.
- * Based on: https://developers.google.com/chart/interactive/docs/gallery/sankey
- * Zoom Logic based on: https://dev.to/alexboyko/javascript-zoom-like-in-maps-for-svghtml-2m3b
+ * Includes a bulletproof loader to prevent infinite "Loading..." loops.
  */
 export class SankeyChart {
     constructor(containerId, wrapperId) {
@@ -19,59 +18,57 @@ export class SankeyChart {
         this.start = { x: 0, y: 0 };
         this.isDragging = false;
 
-        // Force Google Charts to load safely
+        // BULLETPROOF GOOGLE CHARTS LOADER
+        this.initGoogleCharts();
+        this.initPanZoom();
+    }
+
+    initGoogleCharts() {
         if (typeof google !== 'undefined' && google.charts) {
             google.charts.load('current', { packages: ['sankey'] });
             google.charts.setOnLoadCallback(() => {
                 this.isGoogleChartsLoaded = true;
                 if (this.lastRecords) this.drawChart(this.lastRecords, this.lastMetric);
             });
+        } else {
+            // Fallback se a internet oscilar ou o script do Google demorar
+            const retryInterval = setInterval(() => {
+                if (typeof google !== 'undefined' && google.charts) {
+                    clearInterval(retryInterval);
+                    google.charts.load('current', { packages: ['sankey'] });
+                    google.charts.setOnLoadCallback(() => {
+                        this.isGoogleChartsLoaded = true;
+                        if (this.lastRecords) this.drawChart(this.lastRecords, this.lastMetric);
+                    });
+                }
+            }, 500);
         }
-
-        this.initPanZoom();
     }
 
-    /**
-     * Initializes the Map-like Zoom and Pan functionality
-     */
     initPanZoom() {
         const wrapper = document.getElementById(this.wrapperId);
-        const chart = document.getElementById(this.containerId);
-        if (!wrapper || !chart) return;
+        if (!wrapper) return;
 
-        // Mouse Wheel Zooming
         wrapper.addEventListener('wheel', (e) => {
             e.preventDefault();
             const rect = wrapper.getBoundingClientRect();
-            
-            // Calculate cursor position relative to the wrapper
             const mouseX = e.clientX - rect.left;
             const mouseY = e.clientY - rect.top;
 
-            // Calculate current distance from corner divided by scale
             const xs = (mouseX - this.pointX) / this.scale;
             const ys = (mouseY - this.pointY) / this.scale;
 
-            // Zoom In or Out (Delta Y)
             const delta = -e.deltaY;
-            if (delta > 0) {
-                this.scale *= 1.15; // Zoom in
-            } else {
-                this.scale /= 1.15; // Zoom out
-            }
+            this.scale *= (delta > 0) ? 1.15 : (1 / 1.15);
 
-            // Prevent zooming out too much
             if (this.scale < 0.5) this.scale = 0.5;
             if (this.scale > 5) this.scale = 5;
 
-            // Adjust X and Y points to keep the zoom centered on the cursor
             this.pointX = mouseX - xs * this.scale;
             this.pointY = mouseY - ys * this.scale;
-
             this.updateTransform();
         }, { passive: false });
 
-        // Pointer Dragging (Pan)
         wrapper.addEventListener('pointerdown', (e) => {
             e.preventDefault();
             this.isDragging = true;
@@ -92,7 +89,6 @@ export class SankeyChart {
             wrapper.style.cursor = 'grab';
         });
 
-        // UI Button Bindings
         document.getElementById('zoom-in')?.addEventListener('click', () => this.manualZoom(1.2));
         document.getElementById('zoom-out')?.addEventListener('click', () => this.manualZoom(0.8));
         document.getElementById('zoom-reset')?.addEventListener('click', () => {
@@ -104,8 +100,6 @@ export class SankeyChart {
         const wrapper = document.getElementById(this.wrapperId);
         if (!wrapper) return;
         const rect = wrapper.getBoundingClientRect();
-        
-        // Center of the wrapper
         const centerX = rect.width / 2;
         const centerY = rect.height / 2;
 
@@ -123,9 +117,7 @@ export class SankeyChart {
 
     updateTransform() {
         const chart = document.getElementById(this.containerId);
-        if (chart) {
-            chart.style.transform = `translate(${this.pointX}px, ${this.pointY}px) scale(${this.scale})`;
-        }
+        if (chart) chart.style.transform = `translate(${this.pointX}px, ${this.pointY}px) scale(${this.scale})`;
     }
 
     render(records, metric = 'NetWgt') {
@@ -135,9 +127,10 @@ export class SankeyChart {
         const container = document.getElementById(this.containerId);
         if (!container) return;
 
-        if (!this.isGoogleChartsLoaded || !google.visualization) {
+        // Verificação dupla para evitar o loop infinito
+        if (!this.isGoogleChartsLoaded || typeof google === 'undefined' || !google.visualization || !google.visualization.Sankey) {
             container.innerHTML = `<div class="empty-state">Loading Google Charts engine... please wait.</div>`;
-            setTimeout(() => this.render(records, metric), 300);
+            setTimeout(() => this.render(records, metric), 500);
             return;
         }
 
@@ -152,9 +145,7 @@ export class SankeyChart {
     drawChart(records, metric) {
         const container = document.getElementById(this.containerId);
         if (!container) return;
-        
-        // Reset container to avoid drawing bugs
-        container.innerHTML = '';
+        container.innerHTML = ''; // Limpa o canvas
 
         const dataProperty = metric === 'NetWgt' ? 'netWgt' : 'tradeValue';
         const edgeMap = new Map();
@@ -171,7 +162,6 @@ export class SankeyChart {
                 target = record.reporterDesc || record.reporterISO || 'Destination';
             }
 
-            // CRITICAL: Prevent circular loops which crash Google Charts
             if (source === target) return;
 
             const shortDesc = record.cmdDesc && record.cmdDesc.length > 25 
@@ -209,29 +199,5 @@ export class SankeyChart {
         const isDarkMode = document.documentElement.getAttribute('data-theme') === 'dark';
         const wrapper = document.getElementById(this.wrapperId);
         const exactWidth = wrapper ? wrapper.clientWidth : 1000;
-        const exactHeight = wrapper ? wrapper.clientHeight : 500;
-
-        const officialPalette = ['#059669', '#2563EB', '#D97706', '#E11D48', '#0D9488', '#4F46E5', '#7C3AED'];
-
-        const options = {
-            width: exactWidth,
-            height: exactHeight,
-            sankey: {
-                node: {
-                    label: { fontName: 'Inter', fontSize: 13, color: isDarkMode ? '#F8FAFC' : '#0F172A', bold: true },
-                    nodePadding: 30,
-                    width: 20,
-                    colors: officialPalette
-                },
-                link: {
-                    colorMode: 'gradient',
-                    colors: officialPalette,
-                    color: { fill: isDarkMode ? '#334155' : '#CBD5E1', fillOpacity: 0.5 }
-                }
-            }
-        };
-
-        const chart = new google.visualization.Sankey(container);
-        chart.draw(dataTable, options);
-    }
-}
+        
+        // Aumentei
