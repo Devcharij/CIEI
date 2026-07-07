@@ -1,8 +1,8 @@
 /**
  * sankey-chart.js
- * Official Google Charts Sankey Diagram implementation.
- * Includes dynamic DOM width calculation and responsive resize listeners
- * to prevent squeezed rendering or layout breaking.
+ * Full-screen responsive implementation of the official Google Charts Sankey API.
+ * Guarantees 100% horizontal width occupation and implements a Directed Acyclic Graph (DAG)
+ * sanitizer to eliminate cyclic self-loops (Source === Target).
  */
 export class SankeyChart {
     constructor(containerId) {
@@ -10,23 +10,27 @@ export class SankeyChart {
         this.isGoogleChartsLoaded = false;
         this.lastRecords = null;
         this.lastMetric = 'NetWgt';
+        this.resizeTimeout = null;
         
-        // Initialize Google Charts API
+        // Initialize the official Google Charts library
         if (typeof google !== 'undefined' && google.charts) {
             google.charts.load('current', { packages: ['sankey'] });
             google.charts.setOnLoadCallback(() => {
                 this.isGoogleChartsLoaded = true;
                 if (this.lastRecords) {
-                    this.render(this.lastRecords, this.lastMetric);
+                    this.drawChart(this.lastRecords, this.lastMetric);
                 }
             });
         }
 
-        // Responsive auto-redraw on window resize
+        // Debounced resize listener ensures responsive redrawing without horizontal squeezing
         window.addEventListener('resize', () => {
-            if (this.lastRecords && this.isGoogleChartsLoaded) {
-                this.drawChart(this.lastRecords, this.lastMetric);
-            }
+            clearTimeout(this.resizeTimeout);
+            this.resizeTimeout = setTimeout(() => {
+                if (this.lastRecords && this.isGoogleChartsLoaded) {
+                    this.drawChart(this.lastRecords, this.lastMetric);
+                }
+            }, 150);
         });
     }
 
@@ -38,7 +42,7 @@ export class SankeyChart {
         if (!container) return;
 
         if (!this.isGoogleChartsLoaded) {
-            container.innerHTML = `<div class="empty-state">Initializing Google Charts visualization engine...</div>`;
+            container.innerHTML = `<div class="empty-state">Initializing official Google Charts visualization engine...</div>`;
             return;
         }
 
@@ -54,7 +58,7 @@ export class SankeyChart {
         const container = document.getElementById(this.containerId);
         if (!container) return;
 
-        // Clear previous SVG to prevent layout squeezing
+        // Clear existing SVG drawing to prevent rendering artifacts or right-side blank gaps
         container.innerHTML = '';
 
         const edgeMap = new Map();
@@ -63,6 +67,7 @@ export class SankeyChart {
             const val = record[metric] || 0;
             if (val <= 0) return;
 
+            // Determine directional vectors based on trade flow type (Export Outflow vs Import Inflow)
             let source = record.reporterDesc || record.reporterISO;
             let target = record.partnerDesc || record.partnerISO;
 
@@ -71,10 +76,10 @@ export class SankeyChart {
                 target = record.reporterDesc || record.reporterISO;
             }
 
-            // Prevent cyclic self-loops (Source === Target crashes Google Charts)
+            // DAG Safety: Exclude identical origin and destination nodes to prevent Google Charts API crash
             if (source === target) return;
 
-            const shortDesc = record.cmdDesc.length > 30 ? record.cmdDesc.slice(0, 30) + '...' : record.cmdDesc;
+            const shortDesc = record.cmdDesc.length > 32 ? record.cmdDesc.slice(0, 32) + '...' : record.cmdDesc;
             const cmdNode = `HS ${record.cmdCode}: ${shortDesc}`;
 
             const sourceNode = `${source} [Origin]`;
@@ -107,17 +112,21 @@ export class SankeyChart {
 
         const isDarkMode = document.documentElement.getAttribute('data-theme') === 'dark';
         
-        // Dynamically measure the exact pixel width of the DOM card
-        const containerWidth = container.parentElement.clientWidth || container.clientWidth || 900;
+        // Dynamically compute exact pixel width of parent container to ensure 100% full-width stretch
+        const parentWrapper = container.parentElement;
+        const exactWidth = parentWrapper ? parentWrapper.clientWidth : (container.clientWidth || 1000);
 
         const officialPalette = [
-            '#059669', '#2563EB', '#D97706', '#E11D48', 
+            '#059669', // Emerald Green (Extraction Periphery / Nature)
+            '#2563EB', // Royal Blue (Technological Hegemony / EU-27)
+            '#D97706', // Amber Gold (Monetary Capital)
+            '#E11D48', // Crimson Red (High Value-Added Downgrading)
             '#0D9488', '#4F46E5', '#7C3AED', '#DB2777'
         ];
 
         const options = {
-            width: containerWidth,
-            height: 520,
+            width: exactWidth,
+            height: 500,
             sankey: {
                 node: {
                     label: {
@@ -126,8 +135,8 @@ export class SankeyChart {
                         color: isDarkMode ? '#F8FAFC' : '#0F172A',
                         bold: true
                     },
-                    nodePadding: 24,
-                    width: 20,
+                    nodePadding: 26,
+                    width: 22,
                     colors: officialPalette
                 },
                 link: {
