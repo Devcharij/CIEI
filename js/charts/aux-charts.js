@@ -1,7 +1,7 @@
 /**
  * aux-charts.js
- * Gráficos secundários complementares utilizando Chart.js.
- * Demonstra a evolução temporal da EUE (Efeito Tesoura) e o Downgrading por Valor Agregado.
+ * Secondary analytical charts powered by Chart.js.
+ * Illustrates temporal EUE divergence (The Scissors Effect) and Value-Added Disparity.
  */
 export class AuxiliaryCharts {
     constructor() {
@@ -9,15 +9,10 @@ export class AuxiliaryCharts {
         this.downgradingChart = null;
     }
 
-    /**
-     * Gráfico de Série Temporal: Evolução Cruzada (Volume Físico vs Valor Monetário).
-     * Comprova a divergência entre exportações intensivas em natureza e importações de capital.
-     */
     renderTimeSeries(records) {
         const ctx = document.getElementById('timeseries-chart');
         if (!ctx) return;
 
-        // Agrupa por ano e fluxo (Export vs Import)
         const yearlyData = {};
         records.forEach(r => {
             const yr = r.period;
@@ -34,7 +29,7 @@ export class AuxiliaryCharts {
         });
 
         const sortedYears = Object.keys(yearlyData).sort();
-        const expWeights = sortedYears.map(y => (yearlyData[y].expWeight / 1000)); // Tons
+        const expWeights = sortedYears.map(y => (yearlyData[y].expWeight / 1000)); // Metric Tons
         const impValues = sortedYears.map(y => yearlyData[y].impValue); // USD
 
         if (this.timeSeriesChart) this.timeSeriesChart.destroy();
@@ -49,7 +44,7 @@ export class AuxiliaryCharts {
                 labels: sortedYears,
                 datasets: [
                     {
-                        label: 'Volume Físico Exportado (Tons / Natureza Bruta)',
+                        label: 'Exported Physical Mass (Metric Tons / Gross Nature)',
                         data: expWeights,
                         borderColor: '#059669',
                         backgroundColor: 'rgba(5, 150, 105, 0.1)',
@@ -58,7 +53,7 @@ export class AuxiliaryCharts {
                         fill: true
                     },
                     {
-                        label: 'Custo de Importação Tecnológica (US$ / Downgrading)',
+                        label: 'Technological Import Expenditure (USD / Downgrading)',
                         data: impValues,
                         borderColor: '#D97706',
                         backgroundColor: 'transparent',
@@ -77,7 +72,7 @@ export class AuxiliaryCharts {
                         type: 'linear',
                         display: true,
                         position: 'left',
-                        title: { display: true, text: 'Massa Extrativa (Tons)', color: '#059669' },
+                        title: { display: true, text: 'Extraction Volume (Tons)', color: '#059669' },
                         ticks: { color: textColor },
                         grid: { color: gridColor }
                     },
@@ -85,7 +80,7 @@ export class AuxiliaryCharts {
                         type: 'linear',
                         display: true,
                         position: 'right',
-                        title: { display: true, text: 'Gasto Monetário (US$)', color: '#D97706' },
+                        title: { display: true, text: 'Monetary Expenditure (USD)', color: '#D97706' },
                         ticks: { color: textColor },
                         grid: { drawOnChartArea: false }
                     }
@@ -95,15 +90,10 @@ export class AuxiliaryCharts {
         });
     }
 
-    /**
-     * Gráfico de Barras: Valor Agregado Específico ($ / kg) por Mercadoria HS.
-     * Evidencia o paradoxo de Chang/Milberg onde mercadorias processadas custam 100x o insumo primário.
-     */
     renderDowngradingChart(records) {
         const ctx = document.getElementById('downgrading-chart');
         if (!ctx) return;
 
-        // Calcula valor unitário médio por HS Code
         const cmdStats = {};
         records.forEach(r => {
             const code = `HS ${r.cmdCode}`;
@@ -120,11 +110,9 @@ export class AuxiliaryCharts {
 
         Object.entries(cmdStats).forEach(([code, data]) => {
             if (data.wgt > 0) {
-                const ratio = (data.val / data.wgt); // USD por kg
+                const ratio = (data.val / data.wgt);
                 labels.push(`${code} (${data.desc.slice(0, 15)}...)`);
                 unitValues.push(ratio.toFixed(2));
-                
-                // Pinta de vermelho/âmbar se o valor unitário for muito alto (indicando produto manufaturado caro)
                 colors.push(ratio > 50 ? '#E11D48' : (ratio > 10 ? '#D97706' : '#059669'));
             }
         });
@@ -140,7 +128,7 @@ export class AuxiliaryCharts {
             data: {
                 labels: labels,
                 datasets: [{
-                    label: 'Valor Agregado da Mercadoria (US$ por KG físico)',
+                    label: 'Commodity Value-Added Ratio (USD per KG of physical mass)',
                     data: unitValues,
                     backgroundColor: colors,
                     borderRadius: 6
@@ -149,10 +137,10 @@ export class AuxiliaryCharts {
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
-                indexAxis: 'y', // Barras horizontais para facilitar leitura de nomenclaturas HS
+                indexAxis: 'y',
                 scales: {
                     x: {
-                        title: { display: true, text: 'Relação Monetária/Física ($ / kg)', color: textColor },
+                        title: { display: true, text: 'Monetary-to-Physical Ratio ($ / kg)', color: textColor },
                         ticks: { color: textColor },
                         grid: { color: gridColor }
                     },
