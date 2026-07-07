@@ -4,11 +4,12 @@ import { FilterState } from './state/filter-state.js';
 import { CountryMarkupManager } from './components/country-markup.js';
 import { ChartManager } from './charts/chart-manager.js';
 import { UIManager } from './components/ui-manager.js';
+import { BUNDLED_DATASETS } from './data-bundle.js';
 
 /**
  * app.js
- * Ponto de Entrada com Motor de Leitura Universal (Smart Fetch 3.0).
- * Resolve automaticamente problemas de encoding em nomes de arquivos e bloqueios de protocolo file://.
+ * Application Entrypoint. Orchestrates UI modules, binds DOM event listeners,
+ * and manages data persistence via IndexedDB or bundled Zero-CORS fallbacks.
  */
 class App {
     constructor() {
@@ -18,14 +19,6 @@ class App {
         this.markupManager = new CountryMarkupManager('markup-container');
         this.chartManager = new ChartManager();
         this.ui = new UIManager();
-
-        // Nomes exatos dos seus arquivos na pasta data/ (serão codificados via encodeURI automaticamente)
-        this.defaultDatasets = [
-            'data/Fase 1 Macro.csv',
-            'data/Fase 2 Micro.csv',
-            'data/Phase 3A Baterias.csv',
-            'data/3B Veículos Elétricos.csv'
-        ];
     }
 
     async init() {
@@ -37,16 +30,15 @@ class App {
             const count = await this.db.getRecordCount();
             if (count > 0) {
                 this.ui.updateDBStatus('online', count);
-                this.ui.showToast('Base de dados restaurada do cache IndexedDB.', 'success');
+                this.ui.showToast('Database restored from local IndexedDB cache.', 'success');
                 await this.restoreFiltersFromMetadata();
                 await this.refreshDashboard();
             } else {
-                // Inicia o carregamento inteligente da pasta /data
-                await this.autoLoadMultipleDatasets(this.defaultDatasets);
+                await this.loadBundledDatasets();
             }
         } catch (error) {
-            console.error('Falha na inicialização do aplicativo:', error);
-            this.ui.showToast('Erro ao inicializar o banco de dados local.', 'error');
+            console.error('Application initialization failed:', error);
+            this.ui.showToast('Error initializing local database engine.', 'error');
         }
     }
 
@@ -60,34 +52,24 @@ class App {
                 const badge = document.getElementById('sankey-metric-badge');
                 if (badge) {
                     badge.textContent = currentState.metric === 'NetWgt' ? 
-                        'Exibindo: Massa Física (kg) — Espoliação e Natureza Bruta' : 
-                        'Exibindo: Valor Comercial (US$) — Monopólio e Financeirização';
+                        'Displaying: Physical Volume (kg) — Gross Nature Outflow' : 
+                        'Displaying: Monetary Value (US$) — Capital & Monopoly';
                 }
 
                 this.markupManager.render(filteredRecords);
                 this.chartManager.updateAll(filteredRecords, currentState.metric);
             } catch (error) {
-                console.error('Erro na consulta reativa de dados:', error);
-                this.ui.showToast('Falha ao processar consulta com os filtros atuais.', 'error');
+                console.error('Error executing reactive trade flow query:', error);
+                this.ui.showToast('Failed to recompute aggregations with selected filters.', 'error');
             } finally {
                 if (loader) loader.style.display = 'none';
             }
         });
     }
 
-    /**
-     * Motor de Carregamento Blindado com resolução de URLs e fallbacks.
-     */
-    async autoLoadMultipleDatasets(filePaths) {
-        // ALERTA DE SEGURANÇA DO NAVEGADOR: Verifica se foi aberto via duplo-clique (file://)
-        if (window.location.protocol === 'file:') {
-            this.ui.updateDBStatus('offline', 0);
-            this.ui.showToast('⚠️ Modo file:// detectado: O navegador bloqueia leitura da pasta /data por segurança. Suba um arquivo manualmente pelo botão superior ou rode em servidor local / GitHub Pages!', 'warning');
-            return;
-        }
-
+    async loadBundledDatasets() {
         this.ui.updateDBStatus('processing');
-        this.ui.showToast(`Buscando ${filePaths.length} arquivos da pesquisa no servidor...`, 'warning');
+        this.ui.showToast(`Processing ${BUNDLED_DATASETS.length} embedded research datasets...`, 'warning');
 
         try {
             let combinedRecords = [];
@@ -96,36 +78,16 @@ class App {
                 commodities: new Map(), flows: new Set(), schemaMapping: null
             };
 
-            let sucessCount = 0;
-
-            for (const path of filePaths) {
+            for (const dataset of BUNDLED_DATASETS) {
                 try {
-                    // CODIFICAÇÃO DE URL: Transforma espaços em %20 e acentos para evitar Erro 404
-                    const encodedPath = encodeURI(path);
-                    console.info(`[Smart Fetch] Tentando baixar: ${encodedPath}`);
-                    
-                    let response = await fetch(encodedPath);
-                    
-                    // Se falhar, tenta com './' no início como fallback de roteamento
-                    if (!response.ok) {
-                        const fallbackPath = encodeURI('./' + path);
-                        response = await fetch(fallbackPath);
-                    }
+                    const encoder = new TextEncoder();
+                    const arrayBuffer = encoder.encode(dataset.content).buffer;
 
-                    if (!response.ok) {
-                        console.warn(`[Aviso] Arquivo não encontrado: "${path}" (Status: ${response.status}). Verifique o nome na pasta /data.`);
-                        continue;
-                    }
-
-                    const arrayBuffer = await response.arrayBuffer();
-                    const fileName = path.split('/').pop();
-
-                    const { records, metadata } = await this.parser.parseBuffer(arrayBuffer, fileName, (msg) => {
-                        console.info(`[Parser] ${msg}`);
+                    const { records, metadata } = await this.parser.parseBuffer(arrayBuffer, dataset.name, (msg) => {
+                        console.info(`[Bundle Parser] ${msg}`);
                     });
 
                     combinedRecords = combinedRecords.concat(records);
-                    sucessCount++;
 
                     metadata.years.forEach(yr => mergedMetadata.years.add(yr));
                     metadata.reporters.forEach(rep => mergedMetadata.reporters.set(rep.iso, rep.desc));
@@ -135,14 +97,13 @@ class App {
                     if (!mergedMetadata.schemaMapping && metadata.schemaMapping) {
                         mergedMetadata.schemaMapping = metadata.schemaMapping;
                     }
-
-                } catch (fileError) {
-                    console.error(`Erro ao processar "${path}":`, fileError);
+                } catch (err) {
+                    console.error(`Error processing bundled dataset "${dataset.name}":`, err);
                 }
             }
 
             if (combinedRecords.length === 0) {
-                throw new Error('Nenhum dado pôde ser extraído. Verifique se os arquivos estão na pasta /data do repositório.');
+                throw new Error('No data could be extracted from embedded datasets.');
             }
 
             const serializedMetadata = {
@@ -159,15 +120,15 @@ class App {
             await this.db.setMetadata('schema_dictionaries', serializedMetadata);
 
             this.ui.updateDBStatus('online', insertedCount);
-            this.ui.showToast(`Pronto! ${sucessCount} arquivos carregados (${insertedCount.toLocaleString('pt-BR')} registros indexados).`, 'success');
+            this.ui.showToast(`Ready! ${BUNDLED_DATASETS.length} datasets loaded (${insertedCount.toLocaleString('en-US')} records indexed).`, 'success');
             
             this.populateFilterDropdowns(serializedMetadata);
             this.state.reset();
 
         } catch (error) {
-            console.warn('Carregamento automático interrompido:', error);
+            console.error('Critical failure loading bundled datasets:', error);
             this.ui.updateDBStatus('offline', 0);
-            this.ui.showToast('Não foi possível ler a pasta /data. Utilize o botão no topo para carregar o arquivo CSV manualmente.', 'error');
+            this.ui.showToast('Error loading embedded data. Please use the top button to upload a file manually.', 'error');
         }
     }
 
@@ -179,7 +140,7 @@ class App {
                 if (!file) return;
 
                 this.ui.updateDBStatus('processing');
-                this.ui.showToast(`Lendo arquivo: "${file.name}"...`, 'warning');
+                this.ui.showToast(`Reading manual file: "${file.name}"...`, 'warning');
 
                 try {
                     const { records, metadata } = await this.parser.parseFile(file, (msg) => console.info(msg));
@@ -188,13 +149,13 @@ class App {
                     await this.db.setMetadata('schema_dictionaries', metadata);
 
                     this.ui.updateDBStatus('online', insertedCount);
-                    this.ui.showToast(`Dataset substituído! ${insertedCount.toLocaleString('pt-BR')} registros gravados.`, 'success');
+                    this.ui.showToast(`Dataset replaced! ${insertedCount.toLocaleString('en-US')} records saved.`, 'success');
                     this.populateFilterDropdowns(metadata);
                     this.state.reset();
                 } catch (error) {
-                    console.error('Erro na leitura manual:', error);
+                    console.error('Manual reading error:', error);
                     this.ui.updateDBStatus('offline', 0);
-                    this.ui.showToast(error.message || 'Falha ao ler o arquivo.', 'error');
+                    this.ui.showToast(error.message || 'Failed to read file.', 'error');
                 } finally {
                     fileInput.value = '';
                 }
@@ -224,7 +185,7 @@ class App {
                     if (el) el.value = 'ALL';
                 });
                 this.state.reset();
-                this.ui.showToast('Filtros restaurados para a visão global.', 'success');
+                this.ui.showToast('Filters reset to global overview.', 'success');
             });
         }
 
@@ -240,28 +201,28 @@ class App {
     populateFilterDropdowns(metadata) {
         const yearSelect = document.getElementById('filter-year');
         if (yearSelect && metadata.years) {
-            yearSelect.innerHTML = '<option value="ALL">Todos os Anos Agregados</option>' +
+            yearSelect.innerHTML = '<option value="ALL">All Aggregated Years</option>' +
                 metadata.years.map(yr => `<option value="${yr}">${yr}</option>`).join('');
             yearSelect.disabled = false;
         }
 
         const repSelect = document.getElementById('filter-reporter');
         if (repSelect && metadata.reporters) {
-            repSelect.innerHTML = '<option value="ALL">Todos os Países Disponíveis</option>' +
+            repSelect.innerHTML = '<option value="ALL">All Available Reporting Countries</option>' +
                 metadata.reporters.map(r => `<option value="${r.iso}">${r.desc} (${r.iso})</option>`).join('');
             repSelect.disabled = false;
         }
 
         const partSelect = document.getElementById('filter-partner');
         if (partSelect && metadata.partners) {
-            partSelect.innerHTML = '<option value="ALL">Todos os Países Disponíveis</option>' +
+            partSelect.innerHTML = '<option value="ALL">All Available Partner Countries</option>' +
                 metadata.partners.map(p => `<option value="${p.iso}">${p.desc} (${p.iso})</option>`).join('');
             partSelect.disabled = false;
         }
 
         const cmdSelect = document.getElementById('filter-commodity');
         if (cmdSelect && metadata.commodities) {
-            cmdSelect.innerHTML = '<option value="ALL">Todas as Mercadorias no Dataset</option>' +
+            cmdSelect.innerHTML = '<option value="ALL">All Commodities in Dataset</option>' +
                 metadata.commodities.map(c => `<option value="${c.code}">HS ${c.code} — ${c.desc.slice(0, 40)}...</option>`).join('');
             cmdSelect.disabled = false;
         }
@@ -280,7 +241,7 @@ class App {
 
     exportToCSV(records) {
         if (!records || records.length === 0) return;
-        const headers = ['Ano', 'Reporter ISO', 'Reporter Nome', 'Partner ISO', 'Partner Nome', 'Fluxo', 'HS Code', 'Descricao', 'Peso Liquido (kg)', 'Valor Comercial (USD)', 'Arquivo Origem'];
+        const headers = ['Year', 'Reporter ISO', 'Reporter Name', 'Partner ISO', 'Partner Name', 'Flow', 'HS Code', 'Commodity Description', 'Physical Mass (kg)', 'Trade Value (USD)', 'Source File'];
         const rows = records.map(r => [
             r.period, r.reporterISO, `"${r.reporterDesc}"`, r.partnerISO, `"${r.partnerDesc}"`, r.flowCode, r.cmdCode, `"${r.cmdDesc}"`, r.netWgt, r.tradeValue, `"${r.sourceFile || 'Manual'}"`
         ]);
@@ -288,7 +249,7 @@ class App {
         const encodedUri = encodeURI(csvContent);
         const link = document.createElement('a');
         link.setAttribute('href', encodedUri);
-        link.setAttribute('download', `UN_Comtrade_Export_${new Date().toISOString().slice(0,10)}.csv`);
+        link.setAttribute('download', `UN_Comtrade_Metabolism_Export_${new Date().toISOString().slice(0,10)}.csv`);
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
