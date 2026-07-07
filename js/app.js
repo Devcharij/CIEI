@@ -20,11 +20,16 @@ class App {
         this.markupManager = new CountryMarkupManager('markup-container');
         this.chartManager = new ChartManager();
         this.ui = new UIManager();
+
+        // Nomes exatos na sua pasta
+        this.defaultDatasets = [
+            'data/Fase 1 Macro.csv',
+            'data/Fase 2 Micro.csv',
+            'data/Phase 3A Baterias.csv',
+            'data/3B Veículos Elétricos.csv'
+        ];
     }
 
-    /**
-     * Asynchronous Bootstrap.
-     */
     async init() {
         try {
             await this.db.init();
@@ -38,8 +43,12 @@ class App {
                 await this.restoreFiltersFromMetadata();
                 await this.refreshDashboard();
             } else {
-                // Initiates instant Zero-CORS loading from data-bundle.js
-                await this.loadBundledDatasets();
+                // Tenta carregar do servidor/GitHub Pages primeiro. Se falhar, tenta o data-bundle.
+                if (window.location.protocol === 'file:') {
+                    await this.loadBundledDatasets();
+                } else {
+                    await this.autoLoadMultipleDatasets(this.defaultDatasets);
+                }
             }
         } catch (error) {
             console.error('Application initialization failed:', error);
@@ -47,19 +56,14 @@ class App {
         }
     }
 
-    /**
-     * Establishes the reactive pipeline. When FilterState changes, UI updates automatically.
-     */
     setupStateReactivity() {
         this.state.subscribe(async (currentState) => {
             const loader = document.getElementById('chart-loader');
             if (loader) loader.style.display = 'flex';
 
             try {
-                // 1. Query IndexedDB with current active filters (Phase, Metric, Geogroup, etc.)
                 const filteredRecords = await this.db.queryTradeFlows(currentState);
                 
-                // 2. Update descriptive badge on the Sankey section
                 const badge = document.getElementById('sankey-metric-badge');
                 if (badge) {
                     badge.textContent = currentState.metric === 'NetWgt' ? 
@@ -67,7 +71,6 @@ class App {
                         'Displaying: Monetary Value (US$) — Capital & Monopoly';
                 }
 
-                // 3. Delegate rendering to visualization managers
                 this.markupManager.render(filteredRecords);
                 this.chartManager.updateAll(filteredRecords, currentState.metric);
 
@@ -75,18 +78,79 @@ class App {
                 console.error('Error executing reactive trade flow query:', error);
                 this.ui.showToast('Failed to recompute aggregations with selected filters.', 'error');
             } finally {
-                // Hide loading spinner safely
                 if (loader) loader.style.display = 'none';
             }
         });
     }
 
-    /**
-     * Consumes embedded datasets (Phase 1, 2, 3A, 3B) mapping strings to ArrayBuffers.
-     */
+    async autoLoadMultipleDatasets(filePaths) {
+        this.ui.updateDBStatus('processing');
+        this.ui.showToast(`Fetching ${filePaths.length} research datasets from server...`, 'warning');
+
+        try {
+            let combinedRecords = [];
+            const mergedMetadata = {
+                years: new Set(), reporters: new Map(), partners: new Map(),
+                commodities: new Map(), flows: new Set(), schemaMapping: null
+            };
+            let successCount = 0;
+
+            for (const path of filePaths) {
+                try {
+                    const encodedPath = encodeURI(path);
+                    let response = await fetch(encodedPath).catch(() => null);
+                    
+                    if (!response || !response.ok) {
+                        response = await fetch(encodeURI('./' + path)).catch(() => null);
+                    }
+
+                    if (!response || !response.ok) {
+                        console.warn(`File not found: ${path}`);
+                        continue;
+                    }
+
+                    const arrayBuffer = await response.arrayBuffer();
+                    const fileName = path.split('/').pop();
+
+                    const { records, metadata } = await this.parser.parseBuffer(arrayBuffer, fileName, (msg) => console.info(`[Smart Fetch] ${msg}`));
+                    combinedRecords = combinedRecords.concat(records);
+                    successCount++;
+
+                    metadata.years.forEach(yr => mergedMetadata.years.add(yr));
+                    metadata.reporters.forEach(rep => mergedMetadata.reporters.set(rep.iso, rep.desc));
+                    metadata.partners.forEach(part => mergedMetadata.partners.set(part.iso, part.desc));
+                    metadata.commodities.forEach(cmd => mergedMetadata.commodities.set(cmd.code, cmd.desc));
+                    metadata.flows.forEach(fl => mergedMetadata.flows.add(fl));
+                    if (!mergedMetadata.schemaMapping && metadata.schemaMapping) mergedMetadata.schemaMapping = metadata.schemaMapping;
+                } catch (err) { 
+                    console.error(`Error processing "${path}":`, err); 
+                }
+            }
+
+            if (combinedRecords.length === 0) {
+                console.warn('Network fetch returned zero datasets. Falling back to embedded bundled data...');
+                return await this.loadBundledDatasets();
+            }
+
+            const serializedMetadata = this.serializeMetadata(mergedMetadata);
+            await this.db.clearAllData();
+            const insertedCount = await this.db.insertBatch(combinedRecords);
+            await this.db.setMetadata('schema_dictionaries', serializedMetadata);
+
+            this.ui.updateDBStatus('online', insertedCount);
+            this.ui.showToast(`Ready! ${successCount} datasets loaded (${insertedCount.toLocaleString('en-US')} records indexed).`, 'success');
+            this.populateFilterDropdowns(serializedMetadata);
+            this.state.reset();
+
+        } catch (error) {
+            console.error('Auto-load failed:', error);
+            await this.loadBundledDatasets();
+        }
+    }
+
     async loadBundledDatasets() {
         this.ui.updateDBStatus('processing');
-        this.ui.showToast(`Processing ${BUNDLED_DATASETS.length} embedded research datasets...`, 'warning');
+        this.ui.showToast(`Loading embedded zero-CORS research datasets...`, 'warning');
 
         try {
             let combinedRecords = [];
@@ -97,68 +161,53 @@ class App {
 
             for (const dataset of BUNDLED_DATASETS) {
                 try {
-                    // Convert embedded CSV string into an ArrayBuffer for the generic ExcelParser
                     const encoder = new TextEncoder();
                     const arrayBuffer = encoder.encode(dataset.content).buffer;
-
-                    const { records, metadata } = await this.parser.parseBuffer(arrayBuffer, dataset.name, (msg) => {
-                        console.info(`[Bundle Parser] ${msg}`);
-                    });
-
+                    const { records, metadata } = await this.parser.parseBuffer(arrayBuffer, dataset.name, (msg) => console.info(`[Bundle Parser] ${msg}`));
+                    
                     combinedRecords = combinedRecords.concat(records);
 
-                    // Merge dictionaries across all phases
                     metadata.years.forEach(yr => mergedMetadata.years.add(yr));
                     metadata.reporters.forEach(rep => mergedMetadata.reporters.set(rep.iso, rep.desc));
                     metadata.partners.forEach(part => mergedMetadata.partners.set(part.iso, part.desc));
                     metadata.commodities.forEach(cmd => mergedMetadata.commodities.set(cmd.code, cmd.desc));
                     metadata.flows.forEach(fl => mergedMetadata.flows.add(fl));
-                    if (!mergedMetadata.schemaMapping && metadata.schemaMapping) {
-                        mergedMetadata.schemaMapping = metadata.schemaMapping;
-                    }
-                } catch (err) {
-                    console.error(`Error processing bundled dataset "${dataset.name}":`, err);
+                    if (!mergedMetadata.schemaMapping && metadata.schemaMapping) mergedMetadata.schemaMapping = metadata.schemaMapping;
+                } catch (err) { 
+                    console.error(`Error processing bundled dataset "${dataset.name}":`, err); 
                 }
             }
 
-            if (combinedRecords.length === 0) {
-                throw new Error('No data could be extracted from embedded datasets.');
-            }
+            if (combinedRecords.length === 0) throw new Error('No data could be extracted from embedded datasets.');
 
-            const serializedMetadata = {
-                years: Array.from(mergedMetadata.years).sort(),
-                reporters: Array.from(mergedMetadata.reporters.entries()).map(([iso, desc]) => ({ iso, desc })),
-                partners: Array.from(mergedMetadata.partners.entries()).map(([iso, desc]) => ({ iso, desc })),
-                commodities: Array.from(mergedMetadata.commodities.entries()).map(([code, desc]) => ({ code, desc })),
-                flows: Array.from(mergedMetadata.flows),
-                schemaMapping: mergedMetadata.schemaMapping
-            };
-
-            // Wipe old cache and store unified dataset
+            const serializedMetadata = this.serializeMetadata(mergedMetadata);
             await this.db.clearAllData();
             const insertedCount = await this.db.insertBatch(combinedRecords);
             await this.db.setMetadata('schema_dictionaries', serializedMetadata);
 
             this.ui.updateDBStatus('online', insertedCount);
-            this.ui.showToast(`Ready! ${BUNDLED_DATASETS.length} datasets loaded (${insertedCount.toLocaleString('en-US')} records indexed).`, 'success');
-            
+            this.ui.showToast(`Ready! Embedded datasets loaded (${insertedCount.toLocaleString('en-US')} records indexed).`, 'success');
             this.populateFilterDropdowns(serializedMetadata);
-            
-            // Trigger the initial dashboard rendering
             this.state.reset();
 
         } catch (error) {
-            console.error('Critical failure loading bundled datasets:', error);
             this.ui.updateDBStatus('offline', 0);
             this.ui.showToast('Error loading embedded data. Please use the top button to upload a file manually.', 'error');
         }
     }
 
-    /**
-     * Binds DOM interactions to the Application State.
-     */
+    serializeMetadata(mergedMetadata) {
+        return {
+            years: Array.from(mergedMetadata.years).sort(),
+            reporters: Array.from(mergedMetadata.reporters.entries()).map(([iso, desc]) => ({ iso, desc })),
+            partners: Array.from(mergedMetadata.partners.entries()).map(([iso, desc]) => ({ iso, desc })),
+            commodities: Array.from(mergedMetadata.commodities.entries()).map(([code, desc]) => ({ code, desc })),
+            flows: Array.from(mergedMetadata.flows),
+            schemaMapping: mergedMetadata.schemaMapping
+        };
+    }
+
     bindEvents() {
-        // 1. Manual File Upload Handler
         const fileInput = document.getElementById('file-input');
         if (fileInput) {
             fileInput.addEventListener('change', async (e) => {
@@ -170,14 +219,12 @@ class App {
 
                 try {
                     const { records, metadata } = await this.parser.parseFile(file, (msg) => console.info(msg));
-                    
                     await this.db.clearAllData();
                     const insertedCount = await this.db.insertBatch(records);
                     await this.db.setMetadata('schema_dictionaries', metadata);
 
                     this.ui.updateDBStatus('online', insertedCount);
                     this.ui.showToast(`Dataset replaced! ${insertedCount.toLocaleString('en-US')} records saved.`, 'success');
-                    
                     this.populateFilterDropdowns(metadata);
                     this.state.reset();
                 } catch (error) {
@@ -190,7 +237,6 @@ class App {
             });
         }
 
-        // 2. Dimension Metric Toggle (Physical vs Monetary)
         const toggleButtons = document.querySelectorAll('.toggle-btn');
         toggleButtons.forEach(btn => {
             btn.addEventListener('click', () => {
@@ -200,7 +246,7 @@ class App {
             });
         });
 
-        // 3. Dropdown Filters (INCLUDING the new 'phase' filter)
+        // INCLUDES THE NEW 'phase' FILTER IN THE LISTENER BINDINGS
         const filterIds = ['phase', 'year', 'geogroup', 'reporter', 'partner', 'flow', 'commodity'];
         filterIds.forEach(id => {
             const select = document.getElementById(`filter-${id}`);
@@ -211,7 +257,6 @@ class App {
             }
         });
 
-        // 4. Global Reset Button
         const resetBtn = document.getElementById('reset-filters-btn');
         if (resetBtn) {
             resetBtn.addEventListener('click', () => {
@@ -224,7 +269,6 @@ class App {
             });
         }
 
-        // 5. CSV Export Feature
         const exportBtn = document.getElementById('export-table-btn');
         if (exportBtn) {
             exportBtn.addEventListener('click', async () => {
@@ -234,9 +278,6 @@ class App {
         }
     }
 
-    /**
-     * Dynamically populates dropdown menus based on database metadata.
-     */
     populateFilterDropdowns(metadata) {
         const yearSelect = document.getElementById('filter-year');
         if (yearSelect && metadata.years) {
@@ -270,26 +311,17 @@ class App {
         }
     }
 
-    /**
-     * Resurrects filter dropdowns using cached IndexedDB metadata.
-     */
     async restoreFiltersFromMetadata() {
         const metadata = await this.db.getMetadata('schema_dictionaries');
         if (metadata) this.populateFilterDropdowns(metadata);
     }
 
-    /**
-     * Manually triggers a dashboard refresh reading the current state.
-     */
     async refreshDashboard() {
         const records = await this.db.queryTradeFlows(this.state.getState());
         this.markupManager.render(records);
         this.chartManager.updateAll(records, this.state.getState().metric);
     }
 
-    /**
-     * Generates and downloads a CSV of the currently filtered dataset.
-     */
     exportToCSV(records) {
         if (!records || records.length === 0) return;
         
@@ -303,7 +335,7 @@ class App {
             `"${r.partnerDesc}"`, 
             r.flowCode, 
             r.cmdCode, 
-            `"${(r.cmdDesc || '').replace(/"/g, '""')}"`, // Escape internal quotes safely
+            `"${(r.cmdDesc || '').replace(/"/g, '""')}"`, 
             r.netWgt, 
             r.tradeValue, 
             `"${r.sourceFile || 'Manual Upload'}"`
@@ -321,7 +353,6 @@ class App {
     }
 }
 
-// Bootstrap application once DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
     const app = new App();
     app.init();
