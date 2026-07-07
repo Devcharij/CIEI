@@ -1,37 +1,131 @@
 /**
  * sankey-chart.js
- * Full-screen responsive implementation of the official Google Charts Sankey API.
- * Guarantees 100% horizontal width occupation and implements a Directed Acyclic Graph (DAG)
- * sanitizer to eliminate cyclic self-loops (Source === Target).
+ * Official Google Charts Sankey Diagram implementation with Interactive Pan/Zoom.
+ * Based on: https://developers.google.com/chart/interactive/docs/gallery/sankey
+ * Zoom Logic based on: https://dev.to/alexboyko/javascript-zoom-like-in-maps-for-svghtml-2m3b
  */
 export class SankeyChart {
-    constructor(containerId) {
+    constructor(containerId, wrapperId) {
         this.containerId = containerId;
+        this.wrapperId = wrapperId;
         this.isGoogleChartsLoaded = false;
         this.lastRecords = null;
         this.lastMetric = 'NetWgt';
-        this.resizeTimeout = null;
         
-        // Initialize the official Google Charts library
+        // Pan and Zoom State
+        this.scale = 1;
+        this.pointX = 0;
+        this.pointY = 0;
+        this.start = { x: 0, y: 0 };
+        this.isDragging = false;
+
+        // Force Google Charts to load safely
         if (typeof google !== 'undefined' && google.charts) {
             google.charts.load('current', { packages: ['sankey'] });
             google.charts.setOnLoadCallback(() => {
                 this.isGoogleChartsLoaded = true;
-                if (this.lastRecords) {
-                    this.drawChart(this.lastRecords, this.lastMetric);
-                }
+                if (this.lastRecords) this.drawChart(this.lastRecords, this.lastMetric);
             });
         }
 
-        // Debounced resize listener ensures responsive redrawing without horizontal squeezing
-        window.addEventListener('resize', () => {
-            clearTimeout(this.resizeTimeout);
-            this.resizeTimeout = setTimeout(() => {
-                if (this.lastRecords && this.isGoogleChartsLoaded) {
-                    this.drawChart(this.lastRecords, this.lastMetric);
-                }
-            }, 150);
+        this.initPanZoom();
+    }
+
+    /**
+     * Initializes the Map-like Zoom and Pan functionality
+     */
+    initPanZoom() {
+        const wrapper = document.getElementById(this.wrapperId);
+        const chart = document.getElementById(this.containerId);
+        if (!wrapper || !chart) return;
+
+        // Mouse Wheel Zooming
+        wrapper.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const rect = wrapper.getBoundingClientRect();
+            
+            // Calculate cursor position relative to the wrapper
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+
+            // Calculate current distance from corner divided by scale
+            const xs = (mouseX - this.pointX) / this.scale;
+            const ys = (mouseY - this.pointY) / this.scale;
+
+            // Zoom In or Out (Delta Y)
+            const delta = -e.deltaY;
+            if (delta > 0) {
+                this.scale *= 1.15; // Zoom in
+            } else {
+                this.scale /= 1.15; // Zoom out
+            }
+
+            // Prevent zooming out too much
+            if (this.scale < 0.5) this.scale = 0.5;
+            if (this.scale > 5) this.scale = 5;
+
+            // Adjust X and Y points to keep the zoom centered on the cursor
+            this.pointX = mouseX - xs * this.scale;
+            this.pointY = mouseY - ys * this.scale;
+
+            this.updateTransform();
+        }, { passive: false });
+
+        // Pointer Dragging (Pan)
+        wrapper.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            this.isDragging = true;
+            this.start = { x: e.clientX - this.pointX, y: e.clientY - this.pointY };
+            wrapper.style.cursor = 'grabbing';
         });
+
+        window.addEventListener('pointermove', (e) => {
+            if (!this.isDragging) return;
+            e.preventDefault();
+            this.pointX = e.clientX - this.start.x;
+            this.pointY = e.clientY - this.start.y;
+            this.updateTransform();
+        });
+
+        window.addEventListener('pointerup', () => {
+            this.isDragging = false;
+            wrapper.style.cursor = 'grab';
+        });
+
+        // UI Button Bindings
+        document.getElementById('zoom-in')?.addEventListener('click', () => this.manualZoom(1.2));
+        document.getElementById('zoom-out')?.addEventListener('click', () => this.manualZoom(0.8));
+        document.getElementById('zoom-reset')?.addEventListener('click', () => {
+            this.scale = 1; this.pointX = 0; this.pointY = 0; this.updateTransform();
+        });
+    }
+
+    manualZoom(factor) {
+        const wrapper = document.getElementById(this.wrapperId);
+        if (!wrapper) return;
+        const rect = wrapper.getBoundingClientRect();
+        
+        // Center of the wrapper
+        const centerX = rect.width / 2;
+        const centerY = rect.height / 2;
+
+        const xs = (centerX - this.pointX) / this.scale;
+        const ys = (centerY - this.pointY) / this.scale;
+
+        this.scale *= factor;
+        if (this.scale < 0.5) this.scale = 0.5;
+        if (this.scale > 5) this.scale = 5;
+
+        this.pointX = centerX - xs * this.scale;
+        this.pointY = centerY - ys * this.scale;
+        this.updateTransform();
+    }
+
+    updateTransform() {
+        const chart = document.getElementById(this.containerId);
+        if (chart) {
+            chart.style.transform = `translate(${this.pointX}px, ${this.pointY}px) scale(${this.scale})`;
+        }
     }
 
     render(records, metric = 'NetWgt') {
@@ -41,8 +135,9 @@ export class SankeyChart {
         const container = document.getElementById(this.containerId);
         if (!container) return;
 
-        if (!this.isGoogleChartsLoaded) {
-            container.innerHTML = `<div class="empty-state">Initializing official Google Charts visualization engine...</div>`;
+        if (!this.isGoogleChartsLoaded || !google.visualization) {
+            container.innerHTML = `<div class="empty-state">Loading Google Charts engine... please wait.</div>`;
+            setTimeout(() => this.render(records, metric), 300);
             return;
         }
 
@@ -57,35 +152,30 @@ export class SankeyChart {
     drawChart(records, metric) {
         const container = document.getElementById(this.containerId);
         if (!container) return;
-
-        // Clear existing SVG drawing to prevent rendering artifacts or right-side blank gaps
+        
+        // Reset container to avoid drawing bugs
         container.innerHTML = '';
 
+        const dataProperty = metric === 'NetWgt' ? 'netWgt' : 'tradeValue';
         const edgeMap = new Map();
 
-        // CRITICAL BUG FIX: Map the UI metric state ('NetWgt') to the exact JS Object property ('netWgt')
-        const dataProperty = metric === 'NetWgt' ? 'netWgt' : 'tradeValue';
-
         records.forEach(record => {
-            // Extract the value. If value is 0, the Sankey line has 0 thickness and Google API refuses to draw it!
             const val = Number(record[dataProperty]) || 0;
             if (val <= 0) return;
 
-            // Determine directional vectors based on trade flow type (Export Outflow vs Import Inflow)
-            let source = record.reporterDesc || record.reporterISO || 'Unknown Origin';
-            let target = record.partnerDesc || record.partnerISO || 'Unknown Destination';
+            let source = record.reporterDesc || record.reporterISO || 'Origin';
+            let target = record.partnerDesc || record.partnerISO || 'Destination';
 
             if (record.flowCode === 'M') {
-                source = record.partnerDesc || record.partnerISO || 'Unknown Origin';
-                target = record.reporterDesc || record.reporterISO || 'Unknown Destination';
+                source = record.partnerDesc || record.partnerISO || 'Origin';
+                target = record.reporterDesc || record.reporterISO || 'Destination';
             }
 
-            // DAG Safety: Exclude identical origin and destination nodes to prevent Google API crash
+            // CRITICAL: Prevent circular loops which crash Google Charts
             if (source === target) return;
 
-            const shortDesc = record.cmdDesc && record.cmdDesc.length > 32 
-                ? record.cmdDesc.slice(0, 32) + '...' 
-                : (record.cmdDesc || 'Commodity');
+            const shortDesc = record.cmdDesc && record.cmdDesc.length > 25 
+                ? record.cmdDesc.slice(0, 25) + '...' : (record.cmdDesc || 'Commodity');
             const cmdNode = `HS ${record.cmdCode || '0000'}: ${shortDesc}`;
 
             const sourceNode = `${source} [Origin]`;
@@ -106,62 +196,38 @@ export class SankeyChart {
         const rows = [];
         edgeMap.forEach((weight, key) => {
             const parts = key.split('→');
-            if (parts.length === 2) {
-                rows.push([parts[0], parts[1], weight]);
-            }
+            if (parts.length === 2) rows.push([parts[0], parts[1], weight]);
         });
 
-        // If after processing there are no valid edges, display the academic notification
         if (rows.length === 0) {
-            container.innerHTML = `<div class="empty-state">Unable to construct valid directed flow edges between the selected actors.</div>`;
+            container.innerHTML = `<div class="empty-state">Unable to construct valid directed flow edges.</div>`;
             return;
         }
 
         dataTable.addRows(rows);
 
         const isDarkMode = document.documentElement.getAttribute('data-theme') === 'dark';
-        
-        // Dynamically compute exact pixel width of parent container to ensure 100% full-width stretch
-        const parentWrapper = container.parentElement;
-        const exactWidth = parentWrapper && parentWrapper.clientWidth > 0 
-            ? parentWrapper.clientWidth 
-            : (container.clientWidth || 1000);
+        const wrapper = document.getElementById(this.wrapperId);
+        const exactWidth = wrapper ? wrapper.clientWidth : 1000;
+        const exactHeight = wrapper ? wrapper.clientHeight : 500;
 
-        const officialPalette = [
-            '#059669', // Emerald Green (Extraction Periphery / Nature)
-            '#2563EB', // Royal Blue (Technological Hegemony / EU-27)
-            '#D97706', // Amber Gold (Monetary Capital)
-            '#E11D48', // Crimson Red (High Value-Added Downgrading)
-            '#0D9488', '#4F46E5', '#7C3AED', '#DB2777'
-        ];
+        const officialPalette = ['#059669', '#2563EB', '#D97706', '#E11D48', '#0D9488', '#4F46E5', '#7C3AED'];
 
         const options = {
             width: exactWidth,
-            height: 500,
+            height: exactHeight,
             sankey: {
                 node: {
-                    label: {
-                        fontName: 'Inter',
-                        fontSize: 13,
-                        color: isDarkMode ? '#F8FAFC' : '#0F172A',
-                        bold: true
-                    },
-                    nodePadding: 26,
-                    width: 22,
+                    label: { fontName: 'Inter', fontSize: 13, color: isDarkMode ? '#F8FAFC' : '#0F172A', bold: true },
+                    nodePadding: 30,
+                    width: 20,
                     colors: officialPalette
                 },
                 link: {
                     colorMode: 'gradient',
                     colors: officialPalette,
-                    color: {
-                        fill: isDarkMode ? '#334155' : '#CBD5E1',
-                        fillOpacity: isDarkMode ? 0.45 : 0.65
-                    }
+                    color: { fill: isDarkMode ? '#334155' : '#CBD5E1', fillOpacity: 0.5 }
                 }
-            },
-            tooltip: { 
-                textStyle: { fontName: 'Inter', fontSize: 13, color: '#0F172A' },
-                isHtml: true
             }
         };
 
