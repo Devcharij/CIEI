@@ -1,36 +1,44 @@
 /**
  * sankey-chart.js
- * Implementation of the official Google Charts Sankey Diagram API:
- * https://developers.google.com/chart/interactive/docs/gallery/sankey
- * * Includes an advanced Directed Acyclic Graph (DAG) sanitizer to prevent cyclic loop
- * crashes caused by identical Reporter/Partner names in international trade datasets.
+ * Official Google Charts Sankey Diagram implementation.
+ * Includes dynamic DOM width calculation and responsive resize listeners
+ * to prevent squeezed rendering or layout breaking.
  */
 export class SankeyChart {
     constructor(containerId) {
         this.containerId = containerId;
         this.isGoogleChartsLoaded = false;
+        this.lastRecords = null;
+        this.lastMetric = 'NetWgt';
         
-        // Initialize the official Google Charts library with the 'sankey' package
+        // Initialize Google Charts API
         if (typeof google !== 'undefined' && google.charts) {
             google.charts.load('current', { packages: ['sankey'] });
             google.charts.setOnLoadCallback(() => {
                 this.isGoogleChartsLoaded = true;
+                if (this.lastRecords) {
+                    this.render(this.lastRecords, this.lastMetric);
+                }
             });
         }
+
+        // Responsive auto-redraw on window resize
+        window.addEventListener('resize', () => {
+            if (this.lastRecords && this.isGoogleChartsLoaded) {
+                this.drawChart(this.lastRecords, this.lastMetric);
+            }
+        });
     }
 
-    /**
-     * Transforms filtered UN Comtrade records into directed edges and renders the official Sankey.
-     * @param {Array} records - Filtered transactional trade flow objects.
-     * @param {String} metric - 'NetWgt' (physical mass in kg) or 'TradeValue' (USD).
-     */
     render(records, metric = 'NetWgt') {
+        this.lastRecords = records;
+        this.lastMetric = metric;
+
         const container = document.getElementById(this.containerId);
         if (!container) return;
 
         if (!this.isGoogleChartsLoaded) {
-            container.innerHTML = `<div class="empty-state">Loading Google Charts official Sankey visualization engine...</div>`;
-            setTimeout(() => this.render(records, metric), 500);
+            container.innerHTML = `<div class="empty-state">Initializing Google Charts visualization engine...</div>`;
             return;
         }
 
@@ -39,46 +47,46 @@ export class SankeyChart {
             return;
         }
 
-        // Edge Aggregation Map: Key = "Source→Target", Value = Cumulative Weight/Monetary Value
+        this.drawChart(records, metric);
+    }
+
+    drawChart(records, metric) {
+        const container = document.getElementById(this.containerId);
+        if (!container) return;
+
+        // Clear previous SVG to prevent layout squeezing
+        container.innerHTML = '';
+
         const edgeMap = new Map();
 
         records.forEach(record => {
             const val = record[metric] || 0;
             if (val <= 0) return;
 
-            // Define directional flow based on transaction nature (Export vs Import)
             let source = record.reporterDesc || record.reporterISO;
             let target = record.partnerDesc || record.partnerISO;
 
             if (record.flowCode === 'M') {
-                // If Import, invert directional vector: Origin (Partner) -> Destination (Reporter)
                 source = record.partnerDesc || record.partnerISO;
                 target = record.reporterDesc || record.reporterISO;
             }
 
-            // CRITICAL SANKEY SAFETY: Prevent identical source and target names (cyclic self-loops)
-            // The Google Charts Sankey API will crash and render a blank div if Source === Target.
+            // Prevent cyclic self-loops (Source === Target crashes Google Charts)
             if (source === target) return;
 
-            // Commodity Intermediate Node: Illustrates the metabolic material transition
-            // Example: "Chile" -> "HS 283691: Lithium carbonates" -> "Germany"
-            const shortDesc = record.cmdDesc.length > 28 ? record.cmdDesc.slice(0, 28) + '...' : record.cmdDesc;
+            const shortDesc = record.cmdDesc.length > 30 ? record.cmdDesc.slice(0, 30) + '...' : record.cmdDesc;
             const cmdNode = `HS ${record.cmdCode}: ${shortDesc}`;
 
-            // Ensure distinct node naming across levels to satisfy Directed Acyclic Graph (DAG) rules
             const sourceNode = `${source} [Origin]`;
             const targetNode = `${target} [Destination]`;
             
-            // Edge 1: Origin Actor -> Commodity Node
             const key1 = `${sourceNode}→${cmdNode}`;
             edgeMap.set(key1, (edgeMap.get(key1) || 0) + val);
 
-            // Edge 2: Commodity Node -> Destination Actor
             const key2 = `${cmdNode}→${targetNode}`;
             edgeMap.set(key2, (edgeMap.get(key2) || 0) + val);
         });
 
-        // Initialize Google Charts DataTable exactly as mandated by the official API documentation
         const dataTable = new google.visualization.DataTable();
         dataTable.addColumn('string', 'From');
         dataTable.addColumn('string', 'To');
@@ -97,24 +105,19 @@ export class SankeyChart {
 
         dataTable.addRows(rows);
 
-        // Styling configuration adhering strictly to the official Google Sankey Gallery design
         const isDarkMode = document.documentElement.getAttribute('data-theme') === 'dark';
         
-        // Official academic color palette inspired by Google's visual guidelines
+        // Dynamically measure the exact pixel width of the DOM card
+        const containerWidth = container.parentElement.clientWidth || container.clientWidth || 900;
+
         const officialPalette = [
-            '#059669', // Emerald Green (Gross Nature / Primary Minerals)
-            '#2563EB', // Royal Blue (Technological Hegemony / EU-27)
-            '#D97706', // Amber Gold (Monetary Value / Capital Accumulation)
-            '#E11D48', // Crimson Red (Downgrading / High Value-Added Capital Goods)
-            '#0D9488', // Teal
-            '#4F46E5', // Indigo
-            '#7C3AED', // Purple
-            '#DB2777'  // Pink
+            '#059669', '#2563EB', '#D97706', '#E11D48', 
+            '#0D9488', '#4F46E5', '#7C3AED', '#DB2777'
         ];
 
         const options = {
-            width: '100%',
-            height: 500,
+            width: containerWidth,
+            height: 520,
             sankey: {
                 node: {
                     label: {
@@ -123,13 +126,12 @@ export class SankeyChart {
                         color: isDarkMode ? '#F8FAFC' : '#0F172A',
                         bold: true
                     },
-                    nodePadding: 28,  // Vertical spacing between nodes as shown in the official gallery
-                    width: 20,        // Width of the vertical node rectangles
-                    colors: officialPalette,
-                    labelPadding: 10
+                    nodePadding: 24,
+                    width: 20,
+                    colors: officialPalette
                 },
                 link: {
-                    colorMode: 'gradient', // Creates smooth color transitions from origin to destination
+                    colorMode: 'gradient',
                     colors: officialPalette,
                     color: {
                         fill: isDarkMode ? '#334155' : '#CBD5E1',
@@ -138,16 +140,11 @@ export class SankeyChart {
                 }
             },
             tooltip: { 
-                textStyle: { 
-                    fontName: 'Inter', 
-                    fontSize: 13,
-                    color: '#0F172A'
-                },
+                textStyle: { fontName: 'Inter', fontSize: 13, color: '#0F172A' },
                 isHtml: true
             }
         };
 
-        // Instantiate and draw the Sankey chart inside the wrapper container
         const chart = new google.visualization.Sankey(container);
         chart.draw(dataTable, options);
     }
