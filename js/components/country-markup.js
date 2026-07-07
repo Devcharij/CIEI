@@ -1,84 +1,77 @@
 /**
  * country-markup.js
- * Componente exigido pela diretriz analítica da pesquisa:
- * Exibe o Markup Geopolítico visual detalhando a função na divisão internacional do trabalho.
+ * Renders visual Geopolitical Identification Cards detailing the ontological role
+ * of each transacting economy within the international division of labor.
  */
 export class CountryMarkupManager {
     constructor(containerId) {
         this.container = document.getElementById(containerId);
         
-        // Base de conhecimento geopolítica sobre o Metabolismo e Troca Ecologicamente Desigual
+        // Academic Geopolitical Dictionary on Geopolitical Metabolism & EUE
         this.geopoliticalKnowledge = {
             CHL: {
                 name: "Chile",
-                role: "Periferia Extrativa / Salar de Atacama",
+                role: "Primary Extraction Periphery / Salar de Atacama",
                 category: "PERIPHERY_PRIMARY",
-                description: "Exportador primário de Carbonato de Lítio (HS 283691). Sofre severa exaustão de aquíferos fósseis e degradação socioambiental no Atacama para abastecer a transição verde europeia, recebendo baixo valor agregado em retorno."
+                description: "Primary exporter of raw Lithium Carbonate (HS 283691). Suffers severe physical depletion of fossil aquifers and socio-environmental degradation in the Atacama Desert to fuel the European Green Deal, capturing minimal value-added in return."
             },
             ARG: {
                 name: "Argentina",
-                role: "Periferia Extrativa / Triângulo do Lítio",
+                role: "Primary Extraction Periphery / Lithium Triangle",
                 category: "PERIPHERY_PRIMARY",
-                description: "Fornecedor vital de minerais críticos brutos (Lítio, Cobre). Inserção nas GVCs caracterizada pelo esgotamento da natureza bruta sem captação tecnológica ou retenção de rendas de manufatura complexa."
+                description: "Strategic supplier of unrefined critical raw materials (Lithium, Copper). Insertion into Global Value Chains is characterized by gross physical nature expropriation without technological retention or industrial rent capture."
             },
             DEU: {
-                name: "Alemanha",
-                role: "Centro Hegemônico / Monopólio Tecnológico",
+                name: "Germany",
+                role: "Core Hegemony / Technological Monopoly",
                 category: "CORE_TECH",
-                description: "Líder industrial da UE-27 na transição verde. Importa commodities físicas intensivas em recursos naturais (Lítio/Cobre) e reexporta mercadorias de alto valor comercial (Baterias HS 850760 e Veículos Elétricos HS 870380)."
+                description: "Industrial leader of the EU-27 green transition. Imports nature-intensive raw commodities (Lithium/Copper) and re-exports high-value manufactured capital goods (Lithium-ion Batteries HS 850760 and Electric Vehicles HS 870380)."
             },
             FRA: {
-                name: "França",
-                role: "Centro Hegemônico Tecnológico",
+                name: "France",
+                role: "Core Technological Hegemony",
                 category: "CORE_TECH",
-                description: "Aplica o arcabouço normativo do European Green Deal para securitizar o suprimento de Matérias-Primas Críticas (CRMs) a partir do Sul Global, concentrando a agregação de capital e patentes industriais."
+                description: "Leverages the normative framework of the European Green Deal to securitize the supply of Critical Raw Materials (CRMs) from the Global South while concentrating capital accumulation and industrial patents."
             },
             BEL: {
-                name: "Bélgica",
-                role: "Hub de Refino e Logística Europeia",
+                name: "Belgium",
+                role: "European Logistical & Refining Hub",
                 category: "CORE_TECH",
-                description: "Ponto nevrálgico de entrada de minerais brutos e centro de reprocessamento e distribuição de tecnologias limpas para o bloco europeu (EU-27)."
+                description: "Strategic entry point for unrefined mineral commodities and central processing/distribution hub for clean technologies across the European Union (EU-27)."
             },
             BRA: {
-                name: "Brasil",
-                role: "Periferia Regional / Hub Mercosul",
+                name: "Brazil",
+                role: "Regional Periphery / Mercosur Hub",
                 category: "TRANSITION_HYBRID",
-                description: "Exportador massivo de commodities minerais (Ferro, Manganês HS 260200, Grafite HS 250410). Enfrenta barreiras tecnológicas e dependência estrutural na importação de componentes para eletrificação."
+                description: "Massive exporter of mineral commodities (Iron, Manganese HS 260200, Graphite HS 250410). Faces structural technological barriers and dependency when importing components for domestic electrification."
             },
             EUN: {
-                name: "União Europeia (Agregado EU-27)",
-                role: "Bloco Hegemônico da Transição Verde",
+                name: "European Union (EU-27 Aggregate)",
+                role: "Hegemonic Block of the Green Transition",
                 category: "CORE_TECH",
-                description: "Estabelece os termos de troca desiguais através de regulações unilaterais, externalizando os custos socioambientais da mineração para a periferia enquanto detém o monopólio do valor manufaturado."
+                description: "Establishes unequal terms of trade through unilateral regulatory frameworks, externalizing the socio-environmental burdens of mining to the periphery while monopolizing high-tech manufacturing value."
             }
         };
     }
 
-    /**
-     * Atualiza a exibição de cartões de markup geopolítico conforme o dataset processado.
-     * @param {Array} records - Registros filtrados retornados pela query ao IndexedDB.
-     */
     render(records) {
         if (!this.container) return;
 
         if (!records || records.length === 0) {
-            this.container.innerHTML = `<div class="markup-placeholder"><p>Nenhum dado disponível para compor o mapeamento geopolítico.</p></div>`;
+            this.container.innerHTML = `<div class="markup-placeholder"><p>No data available to generate geopolitical mapping.</p></div>`;
             return;
         }
 
-        // Identifica entidades únicas presentes nos registros filtrados
         const activeISOs = new Set();
         records.forEach(r => {
             if (r.reporterISO) activeISOs.add(r.reporterISO);
             if (r.partnerISO) activeISOs.add(r.partnerISO);
         });
 
-        // Estrutura cartões de markup para as principais entidades encontradas
         const cardsHTML = [];
         let renderCount = 0;
-
-        // Prioriza a exibição dos países nucleares da pesquisa do usuário
         const priorityOrder = ['CHL', 'ARG', 'DEU', 'FRA', 'BEL', 'EUN', 'BRA'];
+        
         const sortedISOs = Array.from(activeISOs).sort((a, b) => {
             const indexA = priorityOrder.indexOf(a);
             const indexB = priorityOrder.indexOf(b);
@@ -89,12 +82,12 @@ export class CountryMarkupManager {
         });
 
         for (const iso of sortedISOs) {
-            if (renderCount >= 6) break; // Limita a 6 cartões para não poluir o layout visual
+            if (renderCount >= 6) break;
 
             const knowledge = this.geopoliticalKnowledge[iso];
             if (knowledge) {
-                // Calcula estatísticas rápidas do ator nesse subconjunto de dados
                 const stats = this.computeEntityStats(iso, records);
+                const roleLabel = knowledge.category === 'CORE_TECH' ? 'Core Hegemony' : 'Extraction Periphery';
 
                 cardsHTML.push(`
                     <div class="geopolitical-card" data-category="${knowledge.category}">
@@ -103,12 +96,12 @@ export class CountryMarkupManager {
                                 ${knowledge.name}
                                 <span class="country-iso-badge">${iso}</span>
                             </span>
-                            <span class="geopolitical-role-tag">${knowledge.category === 'CORE_TECH' ? 'Centro Hegemônico' : 'Periferia Extrativa'}</span>
+                            <span class="geopolitical-role-tag">${roleLabel}</span>
                         </div>
                         <p class="geopolitical-desc">${knowledge.description}</p>
                         <div class="geopolitical-metrics">
-                            <span><strong>Papel:</strong> ${knowledge.role}</span>
-                            <span><strong>Massa Relacionada:</strong> ${(stats.weight / 1000).toFixed(1)} tons</span>
+                            <span><strong>Ontological Role:</strong> ${knowledge.role}</span>
+                            <span><strong>Related Volume:</strong> ${(stats.weight / 1000).toFixed(1)} tons</span>
                         </div>
                     </div>
                 `);
@@ -119,13 +112,10 @@ export class CountryMarkupManager {
         if (cardsHTML.length > 0) {
             this.container.innerHTML = `<div class="markup-grid">${cardsHTML.join('')}</div>`;
         } else {
-            this.container.innerHTML = `<div class="markup-placeholder"><p>Exibindo entidades comerciais sem perfil de espoliação mineral catalogado no dicionário geopolítico ativo.</p></div>`;
+            this.container.innerHTML = `<div class="markup-placeholder"><p>Displaying commercial actors without cataloged mineral depletion profiles in the active geopolitical dictionary.</p></div>`;
         }
     }
 
-    /**
-     * Agrega dados rápidos para enriquecer os cartões com volume real transacionado.
-     */
     computeEntityStats(iso, records) {
         let totalWeight = 0;
         records.forEach(r => {
