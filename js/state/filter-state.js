@@ -1,12 +1,12 @@
 /**
  * filter-state.js
- * Gerenciador de estado reativo e dicionários geopolíticos.
- * Emite eventos quando os filtros de visualização são alterados.
+ * Reactive state manager and geopolitical dictionary.
+ * Emits mutation events when visualization filters are modified by the researcher.
  */
 export class FilterState {
     constructor() {
         this.state = {
-            metric: 'NetWgt', // Padrão: Volume físico (kg) para provar perda de natureza bruta
+            metric: 'NetWgt', // Default: Physical Volume (kg) to demonstrate gross nature expropriation
             year: 'ALL',
             geogroup: 'ALL',
             reporter: 'ALL',
@@ -17,17 +17,29 @@ export class FilterState {
 
         this.listeners = [];
 
-        // Agrupamentos geopolíticos teóricos autônomos
+        // Comprehensive Geopolitical Clusters (includes ISO codes, numerical codes, and textual names)
         this.geopoliticalGroups = {
-            EU27: ['AUT', 'BEL', 'BGR', 'HRV', 'CYP', 'CZE', 'DNK', 'EST', 'FIN', 'FRA', 'DEU', 'GRC', 'HUN', 'IRL', 'ITA', 'LVA', 'LTU', 'LUX', 'MLT', 'NLD', 'POL', 'PRT', 'ROU', 'SVK', 'SVN', 'ESP', 'SWE', 'EUN'],
-            LITHIUM_TRIANGLE: ['CHL', 'ARG', 'BOL'],
-            MERCOSUR: ['ARG', 'BRA', 'PRY', 'URY', 'BOL'],
-            CORE_HEGEMONY: ['USA', 'GBR', 'JPN', 'CAN', 'AUS', 'KOR', 'CHN']
+            EU27: [
+                'EUN', 'EU27', 'EU', 'EU-27', 'DEU', 'FRA', 'BEL', 'ITA', 'ESP', 'NLD', 'AUT', 'POL', 
+                'SWE', 'FIN', 'DNK', 'IRL', 'PRT', 'GRC', 'CZE', 'HUN', 'ROU', 'BGR', 'SVK', 'HRV', 
+                'SVN', 'LTU', 'LVA', 'EST', 'CYP', 'MLT', 'LUX', 'GERMANY', 'FRANCE', 'BELGIUM', 
+                'ITALY', 'SPAIN', 'NETHERLANDS', 'EUROPEAN UNION'
+            ],
+            LITHIUM_TRIANGLE: [
+                'CHL', 'ARG', 'BOL', 'CHILE', 'ARGENTINA', 'BOLIVIA', '83', '32', '68'
+            ],
+            MERCOSUR: [
+                'ARG', 'BRA', 'PRY', 'URY', 'BOL', 'ARGENTINA', 'BRAZIL', 'PARAGUAY', 'URUGUAY', 'BOLIVIA'
+            ],
+            CORE_HEGEMONY: [
+                'USA', 'GBR', 'JPN', 'CAN', 'AUS', 'KOR', 'CHN', 'UNITED STATES', 'UNITED KINGDOM', 
+                'JAPAN', 'CANADA', 'AUSTRALIA', 'SOUTH KOREA', 'CHINA'
+            ]
         };
     }
 
     /**
-     * Registra um listener que será invocado quando o estado mudar.
+     * Registers a subscriber callback to be invoked upon state mutations.
      */
     subscribe(callback) {
         if (typeof callback === 'function') {
@@ -36,14 +48,14 @@ export class FilterState {
     }
 
     /**
-     * Notifica os assinantes sobre mutações no estado.
+     * Notifies all subscribed modules of state changes.
      */
     notify() {
         this.listeners.forEach(callback => callback(this.getState()));
     }
 
     /**
-     * Atualiza um ou múltiplos parâmetros de filtro e dispara re-renderização.
+     * Updates one or multiple filter parameters and triggers synchronized re-rendering.
      */
     update(newValues = {}) {
         let changed = false;
@@ -59,12 +71,12 @@ export class FilterState {
     }
 
     /**
-     * Retorna uma cópia do estado atual enriquecida com vetores geopolíticos.
+     * Returns a copy of the current analytical state enriched with geopolitical cluster arrays.
      */
     getState() {
         const currentState = { ...this.state };
         
-        // Se houver um grupo geopolítico selecionado, injeta o array de ISOs
+        // Inject the target geopolitical cluster array if an aggregate is selected
         if (currentState.geogroup !== 'ALL' && this.geopoliticalGroups[currentState.geogroup]) {
             currentState.geodescArray = this.geopoliticalGroups[currentState.geogroup];
         } else {
@@ -75,7 +87,7 @@ export class FilterState {
     }
 
     /**
-     * Reseta os filtros para os valores padrão iniciais.
+     * Resets all analytical parameters to their default global overview values.
      */
     reset() {
         this.state = {
