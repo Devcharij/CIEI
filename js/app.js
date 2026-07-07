@@ -9,8 +9,7 @@ import { BUNDLED_DATASETS } from './data-bundle.js';
 /**
  * app.js
  * Master Application Entrypoint. 
- * Orchestrates UI modules, binds DOM event listeners (including Phase filters),
- * and manages data persistence via IndexedDB or bundled Zero-CORS fallbacks.
+ * Manages the research data pipeline for Phases 1, 2, 3A, and 3B.
  */
 class App {
     constructor() {
@@ -21,12 +20,12 @@ class App {
         this.chartManager = new ChartManager();
         this.ui = new UIManager();
 
-        // Nomes exatos na sua pasta
+        // Datasets mapping for automated fetching
         this.defaultDatasets = [
-            'data/Fase 1 Macro.csv',
-            'data/Fase 2 Micro.csv',
-            'data/Phase 3A Baterias.csv',
-            'data/3B Veículos Elétricos.csv'
+            { path: 'data/Fase 1 Macro.csv', phase: 'PHASE1' },
+            { path: 'data/Fase 2 Micro.csv', phase: 'PHASE2' },
+            { path: 'data/Phase 3A Baterias.csv', phase: 'PHASE3A' },
+            { path: 'data/3B Veículos Elétricos.csv', phase: 'PHASE3B' }
         ];
     }
 
@@ -39,11 +38,10 @@ class App {
             const count = await this.db.getRecordCount();
             if (count > 0) {
                 this.ui.updateDBStatus('online', count);
-                this.ui.showToast('Database restored from local IndexedDB cache.', 'success');
+                this.ui.showToast('Database restored from local cache.', 'success');
                 await this.restoreFiltersFromMetadata();
                 await this.refreshDashboard();
             } else {
-                // Tenta carregar do servidor/GitHub Pages primeiro. Se falhar, tenta o data-bundle.
                 if (window.location.protocol === 'file:') {
                     await this.loadBundledDatasets();
                 } else {
@@ -51,8 +49,8 @@ class App {
                 }
             }
         } catch (error) {
-            console.error('Application initialization failed:', error);
-            this.ui.showToast('Error initializing local database engine.', 'error');
+            console.error('Initialization failed:', error);
+            this.ui.showToast('Critical error initializing database.', 'error');
         }
     }
 
@@ -62,258 +60,164 @@ class App {
             if (loader) loader.style.display = 'flex';
 
             try {
+                // Fetch filtered records from IDB
                 const filteredRecords = await this.db.queryTradeFlows(currentState);
                 
+                // Update Badge
                 const badge = document.getElementById('sankey-metric-badge');
                 if (badge) {
                     badge.textContent = currentState.metric === 'NetWgt' ? 
-                        'Displaying: Physical Volume (kg) — Gross Nature Outflow' : 
-                        'Displaying: Monetary Value (US$) — Capital & Monopoly';
+                        'Displaying: Physical Volume (kg)' : 'Displaying: Monetary Value (USD)';
                 }
 
+                // Render Visualizations
                 this.markupManager.render(filteredRecords);
                 this.chartManager.updateAll(filteredRecords, currentState.metric);
 
             } catch (error) {
-                console.error('Error executing reactive trade flow query:', error);
-                this.ui.showToast('Failed to recompute aggregations with selected filters.', 'error');
+                console.error('Query execution error:', error);
+                this.ui.showToast('Failed to update dashboard.', 'error');
             } finally {
                 if (loader) loader.style.display = 'none';
             }
         });
     }
 
-    async autoLoadMultipleDatasets(filePaths) {
+    // Injects the phase attribute based on the filename during parsing
+    processRecordsWithPhase(records, fileName, phase) {
+        return records.map(r => ({ ...r, sourceFile: fileName, phase: phase }));
+    }
+
+    async autoLoadMultipleDatasets(datasets) {
         this.ui.updateDBStatus('processing');
-        this.ui.showToast(`Fetching ${filePaths.length} research datasets from server...`, 'warning');
+        this.ui.showToast(`Loading research datasets...`, 'warning');
 
         try {
             let combinedRecords = [];
-            const mergedMetadata = {
-                years: new Set(), reporters: new Map(), partners: new Map(),
-                commodities: new Map(), flows: new Set(), schemaMapping: null
-            };
-            let successCount = 0;
+            const mergedMetadata = { years: new Set(), reporters: new Map(), partners: new Map(), commodities: new Map(), flows: new Set() };
 
-            for (const path of filePaths) {
+            for (const item of datasets) {
                 try {
-                    const encodedPath = encodeURI(path);
-                    let response = await fetch(encodedPath).catch(() => null);
-                    
-                    if (!response || !response.ok) {
-                        response = await fetch(encodeURI('./' + path)).catch(() => null);
-                    }
-
-                    if (!response || !response.ok) {
-                        console.warn(`File not found: ${path}`);
-                        continue;
-                    }
+                    const response = await fetch(encodeURI(item.path));
+                    if (!response.ok) continue;
 
                     const arrayBuffer = await response.arrayBuffer();
-                    const fileName = path.split('/').pop();
+                    const { records, metadata } = await this.parser.parseBuffer(arrayBuffer, item.path.split('/').pop());
+                    
+                    // Inject phase logic
+                    const recordsWithPhase = this.processRecordsWithPhase(records, item.path.split('/').pop(), item.phase);
+                    combinedRecords = combinedRecords.concat(recordsWithPhase);
 
-                    const { records, metadata } = await this.parser.parseBuffer(arrayBuffer, fileName, (msg) => console.info(`[Smart Fetch] ${msg}`));
-                    combinedRecords = combinedRecords.concat(records);
-                    successCount++;
-
+                    // Merge Metadata
                     metadata.years.forEach(yr => mergedMetadata.years.add(yr));
-                    metadata.reporters.forEach(rep => mergedMetadata.reporters.set(rep.iso, rep.desc));
-                    metadata.partners.forEach(part => mergedMetadata.partners.set(part.iso, part.desc));
-                    metadata.commodities.forEach(cmd => mergedMetadata.commodities.set(cmd.code, cmd.desc));
-                    metadata.flows.forEach(fl => mergedMetadata.flows.add(fl));
-                    if (!mergedMetadata.schemaMapping && metadata.schemaMapping) mergedMetadata.schemaMapping = metadata.schemaMapping;
-                } catch (err) { 
-                    console.error(`Error processing "${path}":`, err); 
-                }
+                    metadata.reporters.forEach(r => mergedMetadata.reporters.set(r.iso, r.desc));
+                    metadata.partners.forEach(p => mergedMetadata.partners.set(p.iso, p.desc));
+                    metadata.commodities.forEach(c => mergedMetadata.commodities.set(c.code, c.desc));
+                    metadata.flows.forEach(f => mergedMetadata.flows.add(f));
+                } catch (e) { console.error(`Error with ${item.path}:`, e); }
             }
 
-            if (combinedRecords.length === 0) {
-                console.warn('Network fetch returned zero datasets. Falling back to embedded bundled data...');
-                return await this.loadBundledDatasets();
-            }
-
-            const serializedMetadata = this.serializeMetadata(mergedMetadata);
-            await this.db.clearAllData();
-            const insertedCount = await this.db.insertBatch(combinedRecords);
-            await this.db.setMetadata('schema_dictionaries', serializedMetadata);
-
-            this.ui.updateDBStatus('online', insertedCount);
-            this.ui.showToast(`Ready! ${successCount} datasets loaded (${insertedCount.toLocaleString('en-US')} records indexed).`, 'success');
-            this.populateFilterDropdowns(serializedMetadata);
-            this.state.reset();
-
+            await this.finalizeDataLoad(combinedRecords, mergedMetadata);
         } catch (error) {
-            console.error('Auto-load failed:', error);
             await this.loadBundledDatasets();
         }
     }
 
     async loadBundledDatasets() {
         this.ui.updateDBStatus('processing');
-        this.ui.showToast(`Loading embedded zero-CORS research datasets...`, 'warning');
+        let combinedRecords = [];
+        const mergedMetadata = { years: new Set(), reporters: new Map(), partners: new Map(), commodities: new Map(), flows: new Set() };
 
-        try {
-            let combinedRecords = [];
-            const mergedMetadata = {
-                years: new Set(), reporters: new Map(), partners: new Map(),
-                commodities: new Map(), flows: new Set(), schemaMapping: null
-            };
+        for (const dataset of BUNDLED_DATASETS) {
+            try {
+                const encoder = new TextEncoder();
+                const arrayBuffer = encoder.encode(dataset.content).buffer;
+                const { records, metadata } = await this.parser.parseBuffer(arrayBuffer, dataset.name);
+                
+                // Determine phase automatically based on filename content
+                let phase = 'PHASE1';
+                if (dataset.name.includes('2')) phase = 'PHASE2';
+                else if (dataset.name.includes('3A')) phase = 'PHASE3A';
+                else if (dataset.name.includes('3B')) phase = 'PHASE3B';
 
-            for (const dataset of BUNDLED_DATASETS) {
-                try {
-                    const encoder = new TextEncoder();
-                    const arrayBuffer = encoder.encode(dataset.content).buffer;
-                    const { records, metadata } = await this.parser.parseBuffer(arrayBuffer, dataset.name, (msg) => console.info(`[Bundle Parser] ${msg}`));
-                    
-                    combinedRecords = combinedRecords.concat(records);
+                combinedRecords = combinedRecords.concat(this.processRecordsWithPhase(records, dataset.name, phase));
 
-                    metadata.years.forEach(yr => mergedMetadata.years.add(yr));
-                    metadata.reporters.forEach(rep => mergedMetadata.reporters.set(rep.iso, rep.desc));
-                    metadata.partners.forEach(part => mergedMetadata.partners.set(part.iso, part.desc));
-                    metadata.commodities.forEach(cmd => mergedMetadata.commodities.set(cmd.code, cmd.desc));
-                    metadata.flows.forEach(fl => mergedMetadata.flows.add(fl));
-                    if (!mergedMetadata.schemaMapping && metadata.schemaMapping) mergedMetadata.schemaMapping = metadata.schemaMapping;
-                } catch (err) { 
-                    console.error(`Error processing bundled dataset "${dataset.name}":`, err); 
-                }
-            }
-
-            if (combinedRecords.length === 0) throw new Error('No data could be extracted from embedded datasets.');
-
-            const serializedMetadata = this.serializeMetadata(mergedMetadata);
-            await this.db.clearAllData();
-            const insertedCount = await this.db.insertBatch(combinedRecords);
-            await this.db.setMetadata('schema_dictionaries', serializedMetadata);
-
-            this.ui.updateDBStatus('online', insertedCount);
-            this.ui.showToast(`Ready! Embedded datasets loaded (${insertedCount.toLocaleString('en-US')} records indexed).`, 'success');
-            this.populateFilterDropdowns(serializedMetadata);
-            this.state.reset();
-
-        } catch (error) {
-            this.ui.updateDBStatus('offline', 0);
-            this.ui.showToast('Error loading embedded data. Please use the top button to upload a file manually.', 'error');
+                metadata.years.forEach(yr => mergedMetadata.years.add(yr));
+                metadata.reporters.forEach(r => mergedMetadata.reporters.set(r.iso, r.desc));
+                metadata.partners.forEach(p => mergedMetadata.partners.set(p.iso, p.desc));
+                metadata.commodities.forEach(c => mergedMetadata.commodities.set(c.code, c.desc));
+                metadata.flows.forEach(f => mergedMetadata.flows.add(f));
+            } catch (e) { console.error(e); }
         }
+        await this.finalizeDataLoad(combinedRecords, mergedMetadata);
     }
 
-    serializeMetadata(mergedMetadata) {
-        return {
-            years: Array.from(mergedMetadata.years).sort(),
-            reporters: Array.from(mergedMetadata.reporters.entries()).map(([iso, desc]) => ({ iso, desc })),
-            partners: Array.from(mergedMetadata.partners.entries()).map(([iso, desc]) => ({ iso, desc })),
-            commodities: Array.from(mergedMetadata.commodities.entries()).map(([code, desc]) => ({ code, desc })),
-            flows: Array.from(mergedMetadata.flows),
-            schemaMapping: mergedMetadata.schemaMapping
+    async finalizeDataLoad(records, metadata) {
+        const serialized = {
+            years: Array.from(metadata.years).sort(),
+            reporters: Array.from(metadata.reporters.entries()).map(([iso, desc]) => ({ iso, desc })),
+            partners: Array.from(metadata.partners.entries()).map(([iso, desc]) => ({ iso, desc })),
+            commodities: Array.from(metadata.commodities.entries()).map(([code, desc]) => ({ code, desc })),
+            flows: Array.from(metadata.flows)
         };
+        await this.db.clearAllData();
+        const count = await this.db.insertBatch(records);
+        await this.db.setMetadata('schema_dictionaries', serialized);
+        this.ui.updateDBStatus('online', count);
+        this.ui.showToast(`Success! ${count.toLocaleString()} records loaded.`, 'success');
+        this.populateFilterDropdowns(serialized);
+        this.state.reset();
     }
 
     bindEvents() {
+        // Upload button
         const fileInput = document.getElementById('file-input');
         if (fileInput) {
             fileInput.addEventListener('change', async (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
-
-                this.ui.updateDBStatus('processing');
-                this.ui.showToast(`Reading manual file: "${file.name}"...`, 'warning');
-
-                try {
-                    const { records, metadata } = await this.parser.parseFile(file, (msg) => console.info(msg));
-                    await this.db.clearAllData();
-                    const insertedCount = await this.db.insertBatch(records);
-                    await this.db.setMetadata('schema_dictionaries', metadata);
-
-                    this.ui.updateDBStatus('online', insertedCount);
-                    this.ui.showToast(`Dataset replaced! ${insertedCount.toLocaleString('en-US')} records saved.`, 'success');
-                    this.populateFilterDropdowns(metadata);
-                    this.state.reset();
-                } catch (error) {
-                    console.error('Manual reading error:', error);
-                    this.ui.updateDBStatus('offline', 0);
-                    this.ui.showToast(error.message || 'Failed to read file.', 'error');
-                } finally {
-                    fileInput.value = '';
-                }
+                const { records, metadata } = await this.parser.parseFile(file);
+                await this.finalizeDataLoad(this.processRecordsWithPhase(records, file.name, 'MANUAL'), metadata);
             });
         }
+        
+        // Toggle Buttons
+        document.querySelectorAll('.toggle-btn').forEach(btn => btn.addEventListener('click', (e) => {
+            document.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+            e.currentTarget.classList.add('active');
+            this.state.update({ metric: e.currentTarget.dataset.metric });
+        }));
 
-        const toggleButtons = document.querySelectorAll('.toggle-btn');
-        toggleButtons.forEach(btn => {
-            btn.addEventListener('click', () => {
-                toggleButtons.forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-                this.state.update({ metric: btn.getAttribute('data-metric') });
-            });
+        // Filter Selectors
+        ['phase', 'year', 'geogroup', 'reporter', 'partner', 'flow', 'commodity'].forEach(id => {
+            const el = document.getElementById(`filter-${id}`);
+            if (el) el.addEventListener('change', (e) => this.state.update({ [id]: e.target.value }));
         });
 
-        // INCLUDES THE NEW 'phase' FILTER IN THE LISTENER BINDINGS
-        const filterIds = ['phase', 'year', 'geogroup', 'reporter', 'partner', 'flow', 'commodity'];
-        filterIds.forEach(id => {
-            const select = document.getElementById(`filter-${id}`);
-            if (select) {
-                select.addEventListener('change', (e) => {
-                    this.state.update({ [id]: e.target.value });
-                });
-            }
+        document.getElementById('reset-filters-btn')?.addEventListener('click', () => {
+            this.state.reset();
+            this.ui.showToast('Filters reset.', 'success');
         });
-
-        const resetBtn = document.getElementById('reset-filters-btn');
-        if (resetBtn) {
-            resetBtn.addEventListener('click', () => {
-                filterIds.forEach(id => {
-                    const el = document.getElementById(`filter-${id}`);
-                    if (el) el.value = 'ALL';
-                });
-                this.state.reset();
-                this.ui.showToast('Filters reset to global overview.', 'success');
-            });
-        }
-
-        const exportBtn = document.getElementById('export-table-btn');
-        if (exportBtn) {
-            exportBtn.addEventListener('click', async () => {
-                const currentRecords = await this.db.queryTradeFlows(this.state.getState());
-                this.exportToCSV(currentRecords);
-            });
-        }
     }
 
     populateFilterDropdowns(metadata) {
-        const yearSelect = document.getElementById('filter-year');
-        if (yearSelect && metadata.years) {
-            yearSelect.innerHTML = '<option value="ALL">All Aggregated Years</option>' +
-                metadata.years.map(yr => `<option value="${yr}">${yr}</option>`).join('');
-            yearSelect.disabled = false;
-        }
-
-        const repSelect = document.getElementById('filter-reporter');
-        if (repSelect && metadata.reporters) {
-            repSelect.innerHTML = '<option value="ALL">All Available Reporting Countries</option>' +
-                metadata.reporters.map(r => `<option value="${r.iso}">${r.desc} (${r.iso})</option>`).join('');
-            repSelect.disabled = false;
-        }
-
-        const partSelect = document.getElementById('filter-partner');
-        if (partSelect && metadata.partners) {
-            partSelect.innerHTML = '<option value="ALL">All Available Partner Countries</option>' +
-                metadata.partners.map(p => `<option value="${p.iso}">${p.desc} (${p.iso})</option>`).join('');
-            partSelect.disabled = false;
-        }
-
-        const cmdSelect = document.getElementById('filter-commodity');
-        if (cmdSelect && metadata.commodities) {
-            cmdSelect.innerHTML = '<option value="ALL">All Commodities in Dataset</option>' +
-                metadata.commodities.map(c => {
-                    const cleanDesc = c.desc && c.desc.length > 40 ? c.desc.slice(0, 40) + '...' : (c.desc || 'Unknown');
-                    return `<option value="${c.code}">HS ${c.code} — ${cleanDesc}</option>`;
-                }).join('');
-            cmdSelect.disabled = false;
-        }
+        const setOptions = (id, list, mapFn) => {
+            const el = document.getElementById(`filter-${id}`);
+            if (!el) return;
+            const current = el.value;
+            el.innerHTML = `<option value="ALL">All</option>` + list.map(mapFn).join('');
+            el.value = current;
+            el.disabled = false;
+        };
+        setOptions('year', metadata.years, y => `<option value="${y}">${y}</option>`);
+        setOptions('reporter', metadata.reporters, r => `<option value="${r.iso}">${r.desc}</option>`);
+        setOptions('partner', metadata.partners, p => `<option value="${p.iso}">${p.desc}</option>`);
+        setOptions('commodity', metadata.commodities, c => `<option value="${c.code}">HS ${c.code} - ${c.desc.slice(0,30)}</option>`);
     }
 
     async restoreFiltersFromMetadata() {
-        const metadata = await this.db.getMetadata('schema_dictionaries');
-        if (metadata) this.populateFilterDropdowns(metadata);
+        const meta = await this.db.getMetadata('schema_dictionaries');
+        if (meta) this.populateFilterDropdowns(meta);
     }
 
     async refreshDashboard() {
@@ -321,39 +225,6 @@ class App {
         this.markupManager.render(records);
         this.chartManager.updateAll(records, this.state.getState().metric);
     }
-
-    exportToCSV(records) {
-        if (!records || records.length === 0) return;
-        
-        const headers = ['Year', 'Reporter ISO', 'Reporter Name', 'Partner ISO', 'Partner Name', 'Flow', 'HS Code', 'Commodity Description', 'Physical Mass (kg)', 'Trade Value (USD)', 'Source File'];
-        
-        const rows = records.map(r => [
-            r.period, 
-            r.reporterISO, 
-            `"${r.reporterDesc}"`, 
-            r.partnerISO, 
-            `"${r.partnerDesc}"`, 
-            r.flowCode, 
-            r.cmdCode, 
-            `"${(r.cmdDesc || '').replace(/"/g, '""')}"`, 
-            r.netWgt, 
-            r.tradeValue, 
-            `"${r.sourceFile || 'Manual Upload'}"`
-        ]);
-        
-        const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
-        const encodedUri = encodeURI(csvContent);
-        
-        const link = document.createElement('a');
-        link.setAttribute('href', encodedUri);
-        link.setAttribute('download', `UN_Comtrade_Metabolism_Export_${new Date().toISOString().slice(0,10)}.csv`);
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-    }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-    const app = new App();
-    app.init();
-});
+document.addEventListener('DOMContentLoaded', () => new App().init());
