@@ -3,32 +3,51 @@ import { AuxiliaryCharts } from './aux-charts.js';
 
 /**
  * chart-manager.js
- * Visualization orchestration layer. Receives filtered database records,
- * computes global EUE KPIs, and triggers graph rendering engines.
+ * Visualization Orchestration Layer.
+ * Receives filtered database records, computes global EUE KPIs,
+ * populates the Audit Table, and triggers graph rendering engines.
  */
 export class ChartManager {
     constructor() {
-        this.sankey = new SankeyChart('sankey-chart');
+        // Initializes Sankey with both the chart container AND the zoom/pan wrapper ID
+        this.sankey = new SankeyChart('sankey-chart', 'sankey-zoom-wrapper');
         this.auxCharts = new AuxiliaryCharts();
     }
 
+    /**
+     * Master update method called reactively whenever filters change.
+     * @param {Array} records - Filtered transactional records from IndexedDB.
+     * @param {String} currentMetric - 'NetWgt' or 'TradeValue'.
+     */
     updateAll(records, currentMetric = 'NetWgt') {
+        // 1. Compute and render top-level KPIs
         this.renderKPIs(records);
+
+        // 2. Render the primary Sankey Diagram
         this.sankey.render(records, currentMetric);
+
+        // 3. Render secondary analytical charts (Chart.js)
         this.auxCharts.renderTimeSeries(records);
         this.auxCharts.renderDowngradingChart(records);
+
+        // 4. Populate the Data Model Sample table
         this.renderAuditTable(records);
     }
 
+    /**
+     * Computes cumulative material expropriation and financial drainage.
+     * Calculates the Ecologically Unequal Exchange (EUE) Terms of Trade ratio.
+     */
     renderKPIs(records) {
         let totalWeight = 0;
         let totalValue = 0;
 
         records.forEach(r => {
-            totalWeight += (r.netWgt || 0);
-            totalValue += (r.tradeValue || 0);
+            totalWeight += (Number(r.netWgt) || 0);
+            totalValue += (Number(r.tradeValue) || 0);
         });
 
+        // EUE Index: Ratio of Dollars generated per Kilogram of nature moved
         const eueRatio = totalWeight > 0 ? (totalValue / totalWeight) : 0;
 
         document.getElementById('kpi-total-weight').textContent = `${(totalWeight / 1000).toLocaleString('en-US', { maximumFractionDigits: 1 })} Tons`;
@@ -36,6 +55,9 @@ export class ChartManager {
         document.getElementById('kpi-eue-ratio').textContent = `$${eueRatio.toFixed(2)} / kg`;
     }
 
+    /**
+     * Populates the interactive audit table with a sample of the filtered records.
+     */
     renderAuditTable(records) {
         const tbody = document.getElementById('audit-table-body');
         const exportBtn = document.getElementById('export-table-btn');
@@ -43,18 +65,26 @@ export class ChartManager {
 
         if (!records || records.length === 0) {
             tbody.innerHTML = `<tr><td colspan="9" class="text-center empty-state">No records match the active analytical filters.</td></tr>`;
-            exportBtn.disabled = true;
+            if (exportBtn) exportBtn.disabled = true;
             return;
         }
 
-        exportBtn.disabled = false;
+        if (exportBtn) exportBtn.disabled = false;
         
+        // Limit rendering to 50 rows to guarantee DOM fluidity
         const sample = records.slice(0, 50);
+        
         const rowsHTML = sample.map(r => {
             const ratio = r.netWgt > 0 ? (r.tradeValue / r.netWgt).toFixed(2) : '0.00';
-            const flowBadge = r.flowCode === 'X' ? 
-                '<span style="color:var(--color-emerald);font-weight:600;">EXPORT (Outflow)</span>' : 
-                '<span style="color:var(--color-amber);font-weight:600;">IMPORT (Inflow)</span>';
+            
+            // Visual badges mapping Export/Import dynamics
+            const flowBadge = r.flowCode === 'X' 
+                ? '<span style="color:var(--color-emerald);font-weight:600;">EXPORT (Outflow)</span>' 
+                : '<span style="color:var(--color-amber);font-weight:600;">IMPORT (Inflow)</span>';
+
+            const shortDesc = r.cmdDesc && r.cmdDesc.length > 35 
+                ? r.cmdDesc.slice(0, 35) + '...' 
+                : (r.cmdDesc || 'Commodity');
 
             return `
                 <tr>
@@ -62,10 +92,10 @@ export class ChartManager {
                     <td>${r.reporterDesc} <small>(${r.reporterISO})</small></td>
                     <td>${r.partnerDesc} <small>(${r.partnerISO})</small></td>
                     <td>${flowBadge}</td>
-                    <td><code>HS ${r.cmdCode}</code></td>
-                    <td>${r.cmdDesc.slice(0, 35)}...</td>
+                    <td><code>HS ${r.cmdCode || 'N/A'}</code></td>
+                    <td title="${r.cmdDesc}">${shortDesc}</td>
                     <td class="text-right">${(r.netWgt || 0).toLocaleString('en-US')} kg</td>
-                    <td class="text-right">$${(r.tradeValue || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
+                    <td class="text-right">$${(r.tradeValue || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                     <td class="text-right"><strong>$${ratio}</strong></td>
                 </tr>
             `;
