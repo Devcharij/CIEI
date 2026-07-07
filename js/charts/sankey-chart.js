@@ -1,8 +1,8 @@
 /**
  * sankey-chart.js
- * Implementação robusta e responsiva do Google Charts Sankey API.
- * Inclui sanitização contra ciclos de nó (que causam travamento na API) 
- * e cálculo dinâmico de largura para evitar layouts espremidos.
+ * Full-screen responsive implementation of the official Google Charts Sankey API.
+ * Guarantees 100% horizontal width occupation and implements a Directed Acyclic Graph (DAG)
+ * sanitizer to eliminate cyclic self-loops (Source === Target).
  */
 export class SankeyChart {
     constructor(containerId) {
@@ -11,8 +11,8 @@ export class SankeyChart {
         this.lastRecords = null;
         this.lastMetric = 'NetWgt';
         this.resizeTimeout = null;
-
-        // Inicializa a API do Google Charts
+        
+        // Initialize the official Google Charts library
         if (typeof google !== 'undefined' && google.charts) {
             google.charts.load('current', { packages: ['sankey'] });
             google.charts.setOnLoadCallback(() => {
@@ -23,7 +23,7 @@ export class SankeyChart {
             });
         }
 
-        // Redimensionamento responsivo com debounce para evitar sobrecarga na thread
+        // Debounced resize listener ensures responsive redrawing without horizontal squeezing
         window.addEventListener('resize', () => {
             clearTimeout(this.resizeTimeout);
             this.resizeTimeout = setTimeout(() => {
@@ -42,12 +42,12 @@ export class SankeyChart {
         if (!container) return;
 
         if (!this.isGoogleChartsLoaded) {
-            container.innerHTML = `<div class="empty-state">Inicializando o motor visual do Google Charts...</div>`;
+            container.innerHTML = `<div class="empty-state">Initializing official Google Charts visualization engine...</div>`;
             return;
         }
 
         if (!records || records.length === 0) {
-            container.innerHTML = `<div class="empty-state">Nenhum fluxo comercial encontrado para os parâmetros selecionados.</div>`;
+            container.innerHTML = `<div class="empty-state">No commercial trade flows located for the selected analytical parameters.</div>`;
             return;
         }
 
@@ -58,52 +58,50 @@ export class SankeyChart {
         const container = document.getElementById(this.containerId);
         if (!container) return;
 
-        // Limpa o contêiner para evitar sobreposição de vetores SVG anteriores
+        // Clear existing SVG drawing to prevent rendering artifacts or right-side blank gaps
         container.innerHTML = '';
 
         const edgeMap = new Map();
 
+        // CRITICAL BUG FIX: Map the UI metric state ('NetWgt') to the exact JS Object property ('netWgt')
+        const dataProperty = metric === 'NetWgt' ? 'netWgt' : 'tradeValue';
+
         records.forEach(record => {
-            const val = Number(record[metric]) || 0;
+            // Extract the value. If value is 0, the Sankey line has 0 thickness and Google API refuses to draw it!
+            const val = Number(record[dataProperty]) || 0;
             if (val <= 0) return;
 
-            // Define a direção com base no fluxo de comércio (Exportação vs Importação)
-            let source = record.reporterDesc || record.reporterISO || 'Origem Desconhecida';
-            let target = record.partnerDesc || record.partnerISO || 'Destino Desconhecido';
+            // Determine directional vectors based on trade flow type (Export Outflow vs Import Inflow)
+            let source = record.reporterDesc || record.reporterISO || 'Unknown Origin';
+            let target = record.partnerDesc || record.partnerISO || 'Unknown Destination';
 
             if (record.flowCode === 'M') {
-                source = record.partnerDesc || record.partnerISO || 'Origem Desconhecida';
-                target = record.reporterDesc || record.reporterISO || 'Destino Desconhecido';
+                source = record.partnerDesc || record.partnerISO || 'Unknown Origin';
+                target = record.reporterDesc || record.reporterISO || 'Unknown Destination';
             }
 
-            // PROTEÇÃO CRÍTICA (Anti-Ciclo): O Google Charts travará com tela em branco se Source === Target
+            // DAG Safety: Exclude identical origin and destination nodes to prevent Google API crash
             if (source === target) return;
 
-            // Encurta descrições muito longas do Comtrade para manter as labels legíveis
             const shortDesc = record.cmdDesc && record.cmdDesc.length > 32 
                 ? record.cmdDesc.slice(0, 32) + '...' 
-                : (record.cmdDesc || 'Mercadoria');
+                : (record.cmdDesc || 'Commodity');
             const cmdNode = `HS ${record.cmdCode || '0000'}: ${shortDesc}`;
 
-            // Adiciona marcadores estruturais [Origem] e [Destino]
-            // Isso garante um Grafo Acíclico Dirigido (DAG), evitando que países que atuem em ambas 
-            // as pontas causem um loop de dependência fatal na API
-            const sourceNode = `${source} [Origem]`;
-            const targetNode = `${target} [Destino]`;
-
-            // Aresta 1: Origem -> Mercadoria
+            const sourceNode = `${source} [Origin]`;
+            const targetNode = `${target} [Destination]`;
+            
             const key1 = `${sourceNode}→${cmdNode}`;
             edgeMap.set(key1, (edgeMap.get(key1) || 0) + val);
 
-            // Aresta 2: Mercadoria -> Destino
             const key2 = `${cmdNode}→${targetNode}`;
             edgeMap.set(key2, (edgeMap.get(key2) || 0) + val);
         });
 
         const dataTable = new google.visualization.DataTable();
-        dataTable.addColumn('string', 'De');
-        dataTable.addColumn('string', 'Para');
-        dataTable.addColumn('number', metric === 'NetWgt' ? 'Volume Físico (kg)' : 'Valor Comercial (USD)');
+        dataTable.addColumn('string', 'From');
+        dataTable.addColumn('string', 'To');
+        dataTable.addColumn('number', metric === 'NetWgt' ? 'Physical Mass (kg)' : 'Trade Value (USD)');
 
         const rows = [];
         edgeMap.forEach((weight, key) => {
@@ -113,26 +111,27 @@ export class SankeyChart {
             }
         });
 
+        // If after processing there are no valid edges, display the academic notification
         if (rows.length === 0) {
-            container.innerHTML = `<div class="empty-state">Não foi possível construir conexões direcionadas válidas com os dados fornecidos.</div>`;
+            container.innerHTML = `<div class="empty-state">Unable to construct valid directed flow edges between the selected actors.</div>`;
             return;
         }
 
         dataTable.addRows(rows);
 
         const isDarkMode = document.documentElement.getAttribute('data-theme') === 'dark';
-
-        // Mede a largura real do contêiner pai para garantir que o SVG ocupe 100% da tela na horizontal
+        
+        // Dynamically compute exact pixel width of parent container to ensure 100% full-width stretch
         const parentWrapper = container.parentElement;
         const exactWidth = parentWrapper && parentWrapper.clientWidth > 0 
             ? parentWrapper.clientWidth 
-            : (container.clientWidth || 900);
+            : (container.clientWidth || 1000);
 
-        const palette = [
-            '#059669', // Verde Esmeralda (Extrativismo / Natureza Bruta)
-            '#2563EB', // Azul Royal (Hegemonia Tecnológica)
-            '#D97706', // Âmbar (Valor Monetário)
-            '#E11D48', // Vermelho Carmim (Bens Agregados)
+        const officialPalette = [
+            '#059669', // Emerald Green (Extraction Periphery / Nature)
+            '#2563EB', // Royal Blue (Technological Hegemony / EU-27)
+            '#D97706', // Amber Gold (Monetary Capital)
+            '#E11D48', // Crimson Red (High Value-Added Downgrading)
             '#0D9488', '#4F46E5', '#7C3AED', '#DB2777'
         ];
 
@@ -147,13 +146,13 @@ export class SankeyChart {
                         color: isDarkMode ? '#F8FAFC' : '#0F172A',
                         bold: true
                     },
-                    nodePadding: 24,
-                    width: 20,
-                    colors: palette
+                    nodePadding: 26,
+                    width: 22,
+                    colors: officialPalette
                 },
                 link: {
                     colorMode: 'gradient',
-                    colors: palette,
+                    colors: officialPalette,
                     color: {
                         fill: isDarkMode ? '#334155' : '#CBD5E1',
                         fillOpacity: isDarkMode ? 0.45 : 0.65
