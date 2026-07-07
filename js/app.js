@@ -7,8 +7,8 @@ import { UIManager } from './components/ui-manager.js';
 
 /**
  * app.js
- * Ponto de Entrada da Aplicação (Entrypoint) com Ingestão Múltipla Automatizada.
- * Orquestra o carregamento de múltiplos CSVs da pasta /data, unifica metadados e gerencia a UI.
+ * Ponto de Entrada com Motor de Leitura Universal (Smart Fetch 3.0).
+ * Resolve automaticamente problemas de encoding em nomes de arquivos e bloqueios de protocolo file://.
  */
 class App {
     constructor() {
@@ -19,7 +19,7 @@ class App {
         this.chartManager = new ChartManager();
         this.ui = new UIManager();
 
-        // Lista de datasets oficiais da pesquisa acadêmica alocados no repositório GitHub
+        // Nomes exatos dos seus arquivos na pasta data/ (serão codificados via encodeURI automaticamente)
         this.defaultDatasets = [
             'data/Fase 1 Macro.csv',
             'data/Fase 2 Micro.csv',
@@ -28,36 +28,28 @@ class App {
         ];
     }
 
-    /**
-     * Bootstrap assíncrono do ecossistema analítico.
-     */
     async init() {
         try {
             await this.db.init();
             this.bindEvents();
             this.setupStateReactivity();
             
-            // Verifica existência de cache transacional na sessão do navegador
             const count = await this.db.getRecordCount();
             if (count > 0) {
-                // 1. Restauração instantânea a partir do cache local (Zero-Latency)
                 this.ui.updateDBStatus('online', count);
-                this.ui.showToast('Base de dados restaurada rapidamente do cache IndexedDB.', 'success');
+                this.ui.showToast('Base de dados restaurada do cache IndexedDB.', 'success');
                 await this.restoreFiltersFromMetadata();
                 await this.refreshDashboard();
             } else {
-                // 2. Carregamento Direto e Automático de todos os CSVs da pesquisa (Zero-Click)
+                // Inicia o carregamento inteligente da pasta /data
                 await this.autoLoadMultipleDatasets(this.defaultDatasets);
             }
         } catch (error) {
-            console.error('Falha crítica na inicialização da plataforma analítica:', error);
-            this.ui.showToast('Erro ao inicializar o motor do banco de dados local.', 'error');
+            console.error('Falha na inicialização do aplicativo:', error);
+            this.ui.showToast('Erro ao inicializar o banco de dados local.', 'error');
         }
     }
 
-    /**
-     * Inscreve a camada visual para reagir automaticamente a mutações nos filtros do usuário.
-     */
     setupStateReactivity() {
         this.state.subscribe(async (currentState) => {
             const loader = document.getElementById('chart-loader');
@@ -65,8 +57,6 @@ class App {
 
             try {
                 const filteredRecords = await this.db.queryTradeFlows(currentState);
-                
-                // Atualização do indicador visual da dimensão em análise no diagrama de Sankey
                 const badge = document.getElementById('sankey-metric-badge');
                 if (badge) {
                     badge.textContent = currentState.metric === 'NetWgt' ? 
@@ -74,13 +64,11 @@ class App {
                         'Exibindo: Valor Comercial (US$) — Monopólio e Financeirização';
                 }
 
-                // Orquestração sincronizada de renderização
                 this.markupManager.render(filteredRecords);
                 this.chartManager.updateAll(filteredRecords, currentState.metric);
-
             } catch (error) {
-                console.error('Erro na consulta reativa de fluxos comerciais:', error);
-                this.ui.showToast('Falha ao re-computar agregações com os parâmetros selecionados.', 'error');
+                console.error('Erro na consulta reativa de dados:', error);
+                this.ui.showToast('Falha ao processar consulta com os filtros atuais.', 'error');
             } finally {
                 if (loader) loader.style.display = 'none';
             }
@@ -88,45 +76,57 @@ class App {
     }
 
     /**
-     * Carrega múltiplos arquivos CSV/Excel do servidor, unifica os registros e compila metadados consolidados.
-     * @param {Array<String>} filePaths - Vetor com os caminhos dos arquivos na pasta /data.
+     * Motor de Carregamento Blindado com resolução de URLs e fallbacks.
      */
     async autoLoadMultipleDatasets(filePaths) {
+        // ALERTA DE SEGURANÇA DO NAVEGADOR: Verifica se foi aberto via duplo-clique (file://)
+        if (window.location.protocol === 'file:') {
+            this.ui.updateDBStatus('offline', 0);
+            this.ui.showToast('⚠️ Modo file:// detectado: O navegador bloqueia leitura da pasta /data por segurança. Suba um arquivo manualmente pelo botão superior ou rode em servidor local / GitHub Pages!', 'warning');
+            return;
+        }
+
         this.ui.updateDBStatus('processing');
-        this.ui.showToast(`Carregando ${filePaths.length} arquivos analíticos da pesquisa (Fases 1, 2 e 3)...`, 'warning');
+        this.ui.showToast(`Buscando ${filePaths.length} arquivos da pesquisa no servidor...`, 'warning');
 
         try {
             let combinedRecords = [];
             const mergedMetadata = {
-                years: new Set(),
-                reporters: new Map(),
-                partners: new Map(),
-                commodities: new Map(),
-                flows: new Set(),
-                schemaMapping: null
+                years: new Set(), reporters: new Map(), partners: new Map(),
+                commodities: new Map(), flows: new Set(), schemaMapping: null
             };
 
-            // Download e processamento sequencial/paralelo dos datasets
+            let sucessCount = 0;
+
             for (const path of filePaths) {
                 try {
-                    const response = await fetch(path);
+                    // CODIFICAÇÃO DE URL: Transforma espaços em %20 e acentos para evitar Erro 404
+                    const encodedPath = encodeURI(path);
+                    console.info(`[Smart Fetch] Tentando baixar: ${encodedPath}`);
+                    
+                    let response = await fetch(encodedPath);
+                    
+                    // Se falhar, tenta com './' no início como fallback de roteamento
                     if (!response.ok) {
-                        console.warn(`[Aviso] Arquivo não localizado no servidor: "${path}". Pulando leitura.`);
+                        const fallbackPath = encodeURI('./' + path);
+                        response = await fetch(fallbackPath);
+                    }
+
+                    if (!response.ok) {
+                        console.warn(`[Aviso] Arquivo não encontrado: "${path}" (Status: ${response.status}). Verifique o nome na pasta /data.`);
                         continue;
                     }
 
                     const arrayBuffer = await response.arrayBuffer();
                     const fileName = path.split('/').pop();
 
-                    // Processamento via motor de inferência sem colunas pré-fixadas
                     const { records, metadata } = await this.parser.parseBuffer(arrayBuffer, fileName, (msg) => {
-                        console.info(`[AutoLoad] ${msg}`);
+                        console.info(`[Parser] ${msg}`);
                     });
 
-                    // Agregação dos registros transacionados
                     combinedRecords = combinedRecords.concat(records);
+                    sucessCount++;
 
-                    // Fusão (Merge) dos dicionários geopolíticos e classificações HS
                     metadata.years.forEach(yr => mergedMetadata.years.add(yr));
                     metadata.reporters.forEach(rep => mergedMetadata.reporters.set(rep.iso, rep.desc));
                     metadata.partners.forEach(part => mergedMetadata.partners.set(part.iso, part.desc));
@@ -137,15 +137,14 @@ class App {
                     }
 
                 } catch (fileError) {
-                    console.error(`Erro ao processar o dataset individual "${path}":`, fileError);
+                    console.error(`Erro ao processar "${path}":`, fileError);
                 }
             }
 
             if (combinedRecords.length === 0) {
-                throw new Error('Nenhum dado pôde ser extraído dos arquivos na pasta /data. Verifique os caminhos no repositório.');
+                throw new Error('Nenhum dado pôde ser extraído. Verifique se os arquivos estão na pasta /data do repositório.');
             }
 
-            // Serialização final do dicionário consolidado
             const serializedMetadata = {
                 years: Array.from(mergedMetadata.years).sort(),
                 reporters: Array.from(mergedMetadata.reporters.entries()).map(([iso, desc]) => ({ iso, desc })),
@@ -155,30 +154,24 @@ class App {
                 schemaMapping: mergedMetadata.schemaMapping
             };
 
-            // Limpeza e Inserção em Massa no IndexedDB
             await this.db.clearAllData();
             const insertedCount = await this.db.insertBatch(combinedRecords);
             await this.db.setMetadata('schema_dictionaries', serializedMetadata);
 
-            // Atualização da Interface e Ativação do Dashboard
             this.ui.updateDBStatus('online', insertedCount);
-            this.ui.showToast(`Pesquisa carregada com sucesso! ${insertedCount.toLocaleString('pt-BR')} fluxos integrados.`, 'success');
+            this.ui.showToast(`Pronto! ${sucessCount} arquivos carregados (${insertedCount.toLocaleString('pt-BR')} registros indexados).`, 'success');
             
             this.populateFilterDropdowns(serializedMetadata);
-            this.state.reset(); // Dispara a primeira renderização dos diagramas de Sankey
+            this.state.reset();
 
         } catch (error) {
-            console.warn('Falha no carregamento automático zero-click:', error);
+            console.warn('Carregamento automático interrompido:', error);
             this.ui.updateDBStatus('offline', 0);
-            this.ui.showToast('Modo offline ativo. Utilize o botão superior para carregar uma planilha manualmente se necessário.', 'warning');
+            this.ui.showToast('Não foi possível ler a pasta /data. Utilize o botão no topo para carregar o arquivo CSV manualmente.', 'error');
         }
     }
 
-    /**
-     * Mapeia os eventos de interface (botões, uploads manuais e selects) para o estado da aplicação.
-     */
     bindEvents() {
-        // 1. Upload Manual e Substituição Dinâmica (Mantido para flexibilidade futura)
         const fileInput = document.getElementById('file-input');
         if (fileInput) {
             fileInput.addEventListener('change', async (e) => {
@@ -186,54 +179,43 @@ class App {
                 if (!file) return;
 
                 this.ui.updateDBStatus('processing');
-                this.ui.showToast(`Processando arquivo manual: "${file.name}"...`, 'warning');
+                this.ui.showToast(`Lendo arquivo: "${file.name}"...`, 'warning');
 
                 try {
                     const { records, metadata } = await this.parser.parseFile(file, (msg) => console.info(msg));
-
                     await this.db.clearAllData();
                     const insertedCount = await this.db.insertBatch(records);
                     await this.db.setMetadata('schema_dictionaries', metadata);
 
                     this.ui.updateDBStatus('online', insertedCount);
-                    this.ui.showToast(`Planilha atualizada! ${insertedCount.toLocaleString('pt-BR')} registros indexados.`, 'success');
-
+                    this.ui.showToast(`Dataset substituído! ${insertedCount.toLocaleString('pt-BR')} registros gravados.`, 'success');
                     this.populateFilterDropdowns(metadata);
                     this.state.reset();
-
                 } catch (error) {
-                    console.error('Erro na leitura da planilha manual:', error);
+                    console.error('Erro na leitura manual:', error);
                     this.ui.updateDBStatus('offline', 0);
-                    this.ui.showToast(error.message || 'Falha ao processar o arquivo selecionado.', 'error');
+                    this.ui.showToast(error.message || 'Falha ao ler o arquivo.', 'error');
                 } finally {
                     fileInput.value = '';
                 }
             });
         }
 
-        // 2. Alternadores de Dimensão Metabólica (Massa Físico kg vs Valor Monetário US$)
         const toggleButtons = document.querySelectorAll('.toggle-btn');
         toggleButtons.forEach(btn => {
             btn.addEventListener('click', () => {
                 toggleButtons.forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
-                const selectedMetric = btn.getAttribute('data-metric');
-                this.state.update({ metric: selectedMetric });
+                this.state.update({ metric: btn.getAttribute('data-metric') });
             });
         });
 
-        // 3. Leitores de Filtros Geopolíticos e Temporais
         const filterIds = ['year', 'geogroup', 'reporter', 'partner', 'flow', 'commodity'];
         filterIds.forEach(id => {
             const select = document.getElementById(`filter-${id}`);
-            if (select) {
-                select.addEventListener('change', (e) => {
-                    this.state.update({ [id]: e.target.value });
-                });
-            }
+            if (select) select.addEventListener('change', (e) => this.state.update({ [id]: e.target.value }));
         });
 
-        // 4. Botão de Redefinição (Limpar Parâmetros)
         const resetBtn = document.getElementById('reset-filters-btn');
         if (resetBtn) {
             resetBtn.addEventListener('click', () => {
@@ -242,11 +224,10 @@ class App {
                     if (el) el.value = 'ALL';
                 });
                 this.state.reset();
-                this.ui.showToast('Visão global restaurada. Todos os filtros foram redefinidos.', 'success');
+                this.ui.showToast('Filtros restaurados para a visão global.', 'success');
             });
         }
 
-        // 5. Botão de Exportação de Auditoria Científica (CSV)
         const exportBtn = document.getElementById('export-table-btn');
         if (exportBtn) {
             exportBtn.addEventListener('click', async () => {
@@ -256,9 +237,6 @@ class App {
         }
     }
 
-    /**
-     * Preenche as opções de seleção HTML (selects) usando o dicionário consolidado de metadados.
-     */
     populateFilterDropdowns(metadata) {
         const yearSelect = document.getElementById('filter-year');
         if (yearSelect && metadata.years) {
@@ -284,53 +262,39 @@ class App {
         const cmdSelect = document.getElementById('filter-commodity');
         if (cmdSelect && metadata.commodities) {
             cmdSelect.innerHTML = '<option value="ALL">Todas as Mercadorias no Dataset</option>' +
-                metadata.commodities.map(c => `<option value="${c.code}">HS ${c.code} — ${c.desc.slice(0, 42)}...</option>`).join('');
+                metadata.commodities.map(c => `<option value="${c.code}">HS ${c.code} — ${c.desc.slice(0, 40)}...</option>`).join('');
             cmdSelect.disabled = false;
         }
     }
 
-    /**
-     * Restaura os seletores a partir de um cache salvo na sessão anterior.
-     */
     async restoreFiltersFromMetadata() {
         const metadata = await this.db.getMetadata('schema_dictionaries');
-        if (metadata) {
-            this.populateFilterDropdowns(metadata);
-        }
+        if (metadata) this.populateFilterDropdowns(metadata);
     }
 
-    /**
-     * Força a consulta ao IndexedDB e a re-renderização de todos os painéis visuais.
-     */
     async refreshDashboard() {
         const records = await this.db.queryTradeFlows(this.state.getState());
         this.markupManager.render(records);
         this.chartManager.updateAll(records, this.state.getState().metric);
     }
 
-    /**
-     * Gera e baixa um arquivo CSV contendo os dados brutos filtrados no momento da análise.
-     */
     exportToCSV(records) {
         if (!records || records.length === 0) return;
-
-        const headers = ['Ano', 'Reporter ISO', 'Reporter Nome', 'Partner ISO', 'Partner Nome', 'Fluxo', 'HS Code', 'Descricao Mercadoria', 'Peso Físico (kg)', 'Valor Comercial (USD)', 'Arquivo Origem'];
+        const headers = ['Ano', 'Reporter ISO', 'Reporter Nome', 'Partner ISO', 'Partner Nome', 'Fluxo', 'HS Code', 'Descricao', 'Peso Liquido (kg)', 'Valor Comercial (USD)', 'Arquivo Origem'];
         const rows = records.map(r => [
             r.period, r.reporterISO, `"${r.reporterDesc}"`, r.partnerISO, `"${r.partnerDesc}"`, r.flowCode, r.cmdCode, `"${r.cmdDesc}"`, r.netWgt, r.tradeValue, `"${r.sourceFile || 'Manual'}"`
         ]);
-
         const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
         const encodedUri = encodeURI(csvContent);
         const link = document.createElement('a');
         link.setAttribute('href', encodedUri);
-        link.setAttribute('download', `UN_Comtrade_Metabolismo_Export_${new Date().toISOString().slice(0,10)}.csv`);
+        link.setAttribute('download', `UN_Comtrade_Export_${new Date().toISOString().slice(0,10)}.csv`);
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
     }
 }
 
-// Inicializa a plataforma analítica assim que a árvore DOM estiver construída pelo navegador
 document.addEventListener('DOMContentLoaded', () => {
     const app = new App();
     app.init();
